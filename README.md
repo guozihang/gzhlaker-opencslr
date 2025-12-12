@@ -1,4 +1,4 @@
-OpenSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
+OpenCSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8%2B-red)](https://pytorch.org/)
@@ -6,7 +6,7 @@ OpenSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
 ## Overview
 
-OpenSLR (Open Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
+OpenCSLR (Open Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
 
 ## Key Features
 
@@ -20,7 +20,7 @@ OpenSLR (Open Sign Language Recognition) is a comprehensive, modular toolbox for
 ## Project Structure
 
 ```
-OpenSLR/
+OpenCSLR/
 ├── core/                 # Main source code
 │   ├── main.py           # Program entry point
 │   ├── manager/          # Manager components
@@ -51,8 +51,8 @@ OpenSLR/
 
 ```bash
 # Clone the repository
-git clone https://github.com/immc-lab/OpenSLR.git
-cd OpenSLR
+git clone https://github.com/immc-lab/OpenCSLR.git
+cd OpenCSLR
 
 # Install dependencies
 pip install -r requirements.txt
@@ -62,7 +62,7 @@ pip install -r requirements.txt
 
 ### 1. Data Preparation
 
-OpenSLR supports several public sign language datasets. For example, to use the Phoenix2014 dataset:
+OpenCSLR supports several public sign language datasets. For example, to use the Phoenix2014 dataset:
 
 ```bash
 # Download and preprocess the Phoenix2014 dataset
@@ -116,7 +116,7 @@ python main.py --config configs/baseline.yaml --work-dir ./work_dir/baseline_exp
 
 ## Datasets
 
-OpenSLR supports several public sign language datasets:
+OpenCSLR supports several public sign language datasets:
 
 - **Phoenix2014**: Large-scale continuous sign language recognition dataset
 - **Phoenix2014-T**: German sign language dataset with temporal annotations
@@ -174,13 +174,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use this framework in your research, please cite:
 
 ```
-@misc{openslr2024,
-  title={OpenSLR: An Open Sign Language Recognition Framework},
+@misc{OpenCSLR2024,
+  title={OpenCSLR: An Open Sign Language Recognition Framework},
   author={Your Name and Collaborators},
   year={2024},
   publisher={GitHub},
   journal={GitHub repository},
-  howpublished={\url{https://github.com/yourusername/OpenSLR}},
+  howpublished={\url{https://github.com/yourusername/OpenCSLR}},
 }
 ```
 
