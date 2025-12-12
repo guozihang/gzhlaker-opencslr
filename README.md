@@ -6,7 +6,7 @@ OpenCSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
 ## Overview
 
-OpenCSLR (Open Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
+OpenCSLR (Open-Source Continuous Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
 
 ## Key Features
 
