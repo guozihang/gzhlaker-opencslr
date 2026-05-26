@@ -58,11 +58,12 @@ class LogManager :
             raise
 
         try :
-            if ConfigManager.get ( "wandb" ).get ( "enable" , False ) :
+            wandb_config = ArgumentManager.get ( "wandb" )
+            if isinstance ( wandb_config , dict ) and wandb_config.get ( "enable" , False ) :
                 cls.init_wandb ( )
         except Exception as e :
-            logger.error ( f"Failed to initialize wandb: {str ( e )}" )
-            raise
+            cls.WANDB = False
+            logger.warning ( f"Failed to initialize wandb, continuing without it: {str ( e )}" )
 
         LogManager.info_manager ( )
 
@@ -85,8 +86,8 @@ class LogManager :
             )
             cls.WANDB = True
         except Exception as e :
-            logger.error ( f"Failed to initialize wandb: {str ( e )}" )
-            raise
+            cls.WANDB = False
+            logger.warning ( f"Failed to initialize wandb, continuing without it: {str ( e )}" )
 
     @classmethod
     def info_manager ( cls ) -> None :
@@ -176,5 +177,3 @@ class LogManager :
         logger.error ( data )
         if cls.WANDB and type ( data ) is dict :
             wandb.error ( data )
-
-

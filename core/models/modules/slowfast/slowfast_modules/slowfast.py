@@ -301,13 +301,19 @@ def slowfast18(slowfast_path, slowfast_config='SLOWFAST_8x8_R18.yaml', slowfast_
     return model
 
 def slowfast50(slowfast_config='SLOWFAST_8x8_R50.yaml', slowfast_args=[], load_pkl=True, multi=False):
-    cfg = yaml.load(open('slowfast_modules/configs/' + slowfast_config, 'r'), Loader=yaml.FullLoader)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(base_dir, 'configs', slowfast_config)
+    cfg = yaml.load(open(config_path, 'r'), Loader=yaml.FullLoader)
     cfg = CfgNode(cfg)
     if len(slowfast_args) > 0:
         cfg.merge_from_list(slowfast_args)
     model = SlowFast(cfg, multi)
     if load_pkl:
-        load_checkpoint('ckpt/SLOWFAST_8x8_R50.pkl', model)
+        ckpt_path = os.path.join(base_dir, 'ckpt', 'SLOWFAST_8x8_R50.pkl')
+        if os.path.exists(ckpt_path):
+            load_checkpoint(ckpt_path, model)
+        else:
+            print(f"Warning: pretrained checkpoint not found, skipping load: {ckpt_path}")
     return model
 
 
@@ -329,7 +335,10 @@ def slowfast101(slowfast_config='SLOWFAST_64x2_R101_50_50.yaml', slowfast_args=[
 
     if load_pkl:
         ckpt_path = os.path.join(base_dir, 'ckpt', 'SLOWFAST_64x2_R101_50_50.pkl')
-        load_checkpoint(ckpt_path, model)
+        if os.path.exists(ckpt_path):
+            load_checkpoint(ckpt_path, model)
+        else:
+            print(f"Warning: pretrained checkpoint not found, skipping load: {ckpt_path}")
 
     return model
 

@@ -8,6 +8,8 @@ from models.modules.corrnet_resnet import corrnet_resnet18
 from models.modules.norm import NormLinear
 from models.senmodules.senresnet import SENresnet
 from models.senmodules.SENLoss import SENLoss
+from models.senmodules.sen_TemporalConv import sen_TemporalConv
+from models.senmodules.sen_Decoder import sen_Decoder
 
 from models.modules.slowfast.SlowFast import SlowFast
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
@@ -42,14 +44,14 @@ def build_sen(args, gloss_dict, loss_weights):
             SENresnet(args)
         ]),
         temporal_module_container=Container([
-            TemporalConv1D(args),
+            sen_TemporalConv(args),
             BiLSTM(args),
             Classifier(args)
         ]),
         loss_module_container=Container([
             SENLoss(loss_weights)
         ]),
-        decoder=Decoder(args,gloss_dict)
+        decoder=sen_Decoder(args, gloss_dict)
     )
 
 def build_vac(args, gloss_dict, loss_weights):
@@ -74,6 +76,7 @@ def build_vac(args, gloss_dict, loss_weights):
     return model
 
 def build_slowfast(args, gloss_dict, loss_weights):
+    conv1d = TemporalSlowFastConv1D(args)
 
     return SignLanguageModel(
         spatial_module_container=Container([
@@ -81,8 +84,8 @@ def build_slowfast(args, gloss_dict, loss_weights):
         ]),
 
         temporal_module_container=Container([
-            TemporalSlowFastConv1D(args),
-            temporal_model(args),
+            conv1d,
+            temporal_model(args, conv1d),
             # slowfast_classifier(args)
         ]),
 
@@ -92,17 +95,31 @@ def build_slowfast(args, gloss_dict, loss_weights):
 
         decoder=SlowFast_Decoder(args, gloss_dict)
     )
-    return model
 
 def build_corrnet(args, gloss_dict, loss_weights):
+    conv1d = CorrNeT_TemporalConv1D(args)
+    classifier = Classifier(args)
+    hidden_size = args.get("hidden_size", 1024)
+    num_classes = args["num_classes"]
+
+    if args.get("weight_norm", True):
+        classifier.classifier = NormLinear(hidden_size, num_classes)
+        conv1d.conv1d.fc = NormLinear(hidden_size, num_classes)
+    else:
+        classifier.classifier = nn.Linear(hidden_size, num_classes)
+        conv1d.conv1d.fc = nn.Linear(hidden_size, num_classes)
+
+    if args.get("share_classifier", True):
+        conv1d.conv1d.fc = classifier.classifier
+
     return SignLanguageModel(
         spatial_module_container=Container([
             corrnet_resnet18(args)
         ]),
         temporal_module_container=Container([
-            CorrNeT_TemporalConv1D(args),
+            conv1d,
             BiLSTM(args),
-            Classifier(args)
+            classifier
         ]),
         loss_module_container=Container([
             CorrNetLoss(loss_weights)

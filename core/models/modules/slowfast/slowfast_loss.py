@@ -23,7 +23,9 @@ class slowfast_loss(nn.Module):
                 loss += total_loss['SeqCTC']
             elif k == 'Slow' or k == 'Fast':
                 i = 1 if k == 'Slow' else 2
-                total_loss[f'{k}'] = weight * self.loss_weights['SeqCTC'] * self.loss['CTCLoss'](
+                if len(data["sequence_logits"]) <= i or len(data["conv_logits"]) <= i:
+                    continue
+                total_loss[f'{k}'] = weight * self.loss_weights.get('SeqCTC', 1.0) * self.loss['CTCLoss'](
                     data["sequence_logits"][i].log_softmax(-1),
                     data["label"].cpu().int(), data["feat_len"].cpu().int(),
                     data["label_lgt"].cpu().int()).mean()

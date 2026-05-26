@@ -136,9 +136,9 @@ class ExperimentManager:
 
     @classmethod
     def run_test( cls ):
-        dev_wer = seq_eval ( cls.arg , cls.data_loader [ "dev" ] , cls.model , cls.device ,
+        dev_wer = seq_eval ( cls.arg , DataloaderManager.DATALOADER [ "dev" ] , cls.model , cls.device ,
                              "dev" , 6667 , cls.arg.work_dir)
-        test_wer = seq_eval ( cls.arg , cls.data_loader [ "test" ] , cls.model , cls.device ,
+        test_wer = seq_eval ( cls.arg , DataloaderManager.DATALOADER [ "test" ] , cls.model , cls.device ,
                               "test" , 6667 , cls.arg.work_dir)
         LogManager.info ( 'Dev WER: {:05.2f}\n'.format ( dev_wer ) )
         LogManager.info ( 'Test WER: {:05.2f}\n'.format ( test_wer ) )
@@ -190,12 +190,11 @@ class ExperimentManager:
                 else:
                     print('Can Not Remove Weights: {}.'.format(w))
         weights = cls.modified_weights(state_dict['model_state_dict'], False)
-        weights = cls.modified_weights(state_dict['model_state_dict'])
         cls.model.load_state_dict(weights, strict=True)
 
     @staticmethod
     def modified_weights(state_dict, modified=False):
-        state_dict = OrderedDict([(k.replace('.module', ''), v) for k, v in state_dict.items()])
+        state_dict = OrderedDict([(k.replace('.module.', '.'), v) for k, v in state_dict.items()])
         if not modified:
             return state_dict
         modified_dict = dict()
@@ -216,6 +215,3 @@ class ExperimentManager:
             cls.scheduler.load_state_dict(state_dict["scheduler_state_dict"])
         cls.arg.optimizer_args['start_epoch'] = state_dict["epoch"] + 1
         LogManager.info(f"Resuming from checkpoint: epoch {cls.arg.optimizer_args['start_epoch']}")
-
-
-

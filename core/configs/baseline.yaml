@@ -24,6 +24,8 @@ loss_weights:
   Dist: 25.0
   Cu: 0.001
   Cp: 0.001
+  Slow: 1.0
+  Fast: 1.0
 
 optimizer_args:
   optimizer: Adam
@@ -41,6 +43,11 @@ feeder_args:
   drop_ratio: 1.0
   frame_interval: 1
   image_scale: 1.0
+  skip_fileids:
+    dev:
+      - S004264_P0007_T00
+    test:
+      - S002001_P0007_T00
 
 model: models.build_function.build_slowfast
 decode_mode: beam

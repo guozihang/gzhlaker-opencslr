@@ -40,7 +40,7 @@ class TSEM(nn.Module):
         for i in range(self.num):
             aggregate_out+=self.conv_enhance[i](out)*self.weights[i]
         out=self.conv_back(aggregate_out)
-        return x*(F.sigmoid(out.unsqueeze(-1).unsqueeze(-1))-0.5)*self.alpha
+        return x*(torch.sigmoid(out.unsqueeze(-1).unsqueeze(-1))-0.5)*self.alpha
 
 class SSEM(nn.Module):
     def __init__(self,input_size):
@@ -60,7 +60,7 @@ class SSEM(nn.Module):
         for i in range(self.num):
             aggregate_out+=self.conv_enhance[i](out)*self.weights[i]
         out=self.conv_back(aggregate_out)
-        return x*(F.sigmoid(out)-0.5)*self.alpha
+        return x*(torch.sigmoid(out)-0.5)*self.alpha
 
 class BasicBlock(nn.Module):
     expansion=1
@@ -179,7 +179,6 @@ class SENresnet(nn.Module):
             "framewise_features": framewise,
             "visual_features": x,
         }
-
 
 
 

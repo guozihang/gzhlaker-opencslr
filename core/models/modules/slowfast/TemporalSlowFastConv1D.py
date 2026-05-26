@@ -10,10 +10,11 @@ import torch.nn.functional as F
 class TemporalSlowFastConv1D( nn.Module ) :
     def __init__ ( self , args ) :
         super ( TemporalSlowFastConv1D , self ).__init__ ( )
+        hidden_size = args.get("hidden_size", None)
         self.conv1d = TemporalSlowFastFuse(
-            fast_input_size=256, slow_input_size=2048, hidden_size=args.get("hidden_size", None),
+            fast_input_size=256, slow_input_size=2048, hidden_size=hidden_size,
             conv_type=args.get("conv_type", None), use_bn=args["use_bn"], num_classes=args["num_classes"] ,)
-        self.fc = nn.ModuleList([nn.Linear(1024, args["num_classes"]) for i in range(3)])
+        self.fc = nn.ModuleList([nn.Linear(hidden_size, args["num_classes"]) for i in range(3)])
 
     def forward(self, data):
 

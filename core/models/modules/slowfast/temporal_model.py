@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
 
 class temporal_model(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, conv1d=None):
         super(temporal_model, self).__init__()
         #原来的temporal_model
         self.temporal_model = nn.ModuleList([
@@ -21,19 +21,28 @@ class temporal_model(nn.Module):
         weight_norm = args.get("weight_norm", None)
         share_classifier = args.get("share_classifier", None)
         self.num_classes = args.get("num_classes", None)
-        self.conv1d = TemporalSlowFastConv1D(args)
+        self.hidden_size = args.get("hidden_size", None)
+        self.conv1d = conv1d
         if weight_norm:
-            self.classifier = nn.ModuleList([NormLinear(1024, self.num_classes) for i in range(3)])
-            self.conv1d.fc = nn.ModuleList([NormLinear(1024, self.num_classes) for i in range(3)])
+            self.classifier = nn.ModuleList([NormLinear(self.hidden_size, self.num_classes) for i in range(3)])
+            if self.conv1d is not None:
+                self.conv1d.conv1d.fc = nn.ModuleList(
+                    [NormLinear(self.hidden_size, self.num_classes) for i in range(3)]
+                )
         else:
-            self.classifier = nn.ModuleList([nn.Linear(1024, self.num_classes) for i in range(3)])
-            self.conv1d.fc = nn.ModuleList([nn.Linear(1024, self.num_classes) for i in range(3)])
+            self.classifier = nn.ModuleList([nn.Linear(self.hidden_size, self.num_classes) for i in range(3)])
+            if self.conv1d is not None:
+                self.conv1d.conv1d.fc = nn.ModuleList(
+                    [nn.Linear(self.hidden_size, self.num_classes) for i in range(3)]
+                )
         if share_classifier == 1:
-            self.conv1d.fc = self.classifier
+            if self.conv1d is not None:
+                self.conv1d.conv1d.fc = self.classifier
         elif share_classifier == 2:
             classifier = self.classifier[0]
             self.classifier = nn.ModuleList([classifier for i in range(3)])
-            self.conv1d.fc = nn.ModuleList([classifier for i in range(3)])
+            if self.conv1d is not None:
+                self.conv1d.conv1d.fc = nn.ModuleList([classifier for i in range(3)])
 
     def forward(self, data):
 
