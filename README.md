@@ -1,4 +1,4 @@
-OpenSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
+OpenCSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8%2B-red)](https://pytorch.org/)
@@ -6,7 +6,7 @@ OpenSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
 ## Overview
 
-OpenSLR (Open Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
+OpenCSLR (Open Continuous Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
 
 ## Key Features
 
@@ -20,7 +20,7 @@ OpenSLR (Open Sign Language Recognition) is a comprehensive, modular toolbox for
 ## Project Structure
 
 ```
-OpenSLR/
+OpenCSLR/
 ├── core/                 # Main source code
 │   ├── main.py           # Program entry point
 │   ├── manager/          # Manager components
@@ -53,7 +53,7 @@ OpenSLR/
 ```bash
 # Clone the repository
 git clone https://github.com/immc-lab/OpenSLR.git
-cd OpenSLR
+cd OpenCSLR
 
 # Install dependencies
 pip install -r requirements.txt
@@ -63,7 +63,7 @@ pip install -r requirements.txt
 
 ### 1. Data Preparation
 
-OpenSLR supports several public sign language datasets. For example, to use the Phoenix2014 dataset:
+OpenCSLR supports several public sign language datasets. For example, to use the Phoenix2014 dataset:
 
 ```bash
 # Download and preprocess the Phoenix2014 dataset
@@ -105,7 +105,7 @@ optimizer_args:
 
 ```bash
 cd core
-python main.py --model models.build_function.build_vac --work-dir ./work_dir/openslr/vac/14/ --dataset phoenix2014 --config ./configs/vac.yaml
+python main.py --model models.build_function.build_vac --work-dir ./work_dir/OpenCSLR/vac/14/ --dataset phoenix2014 --config ./configs/vac.yaml
 ```
 
 ## Model Architectures
@@ -117,7 +117,7 @@ python main.py --model models.build_function.build_vac --work-dir ./work_dir/ope
 
 ## Datasets
 
-OpenSLR supports several public sign language datasets:
+OpenCSLR supports several public sign language datasets:
 
 - **Phoenix2014**: Large-scale continuous sign language recognition dataset
 - **Phoenix2014-T**: German sign language dataset with temporal annotations
@@ -130,7 +130,7 @@ The framework provides comprehensive evaluation metrics:
 
 ```bash
 # Evaluate a trained model
-python main.py --model models.build_function.build_vac --dataset phoenix2014 --config ./configs/vac.yaml --phase test --load-checkpoints ./work_dir/openslr/vac/14/best_model.pt
+python main.py --model models.build_function.build_vac --dataset phoenix2014 --config ./configs/vac.yaml --phase test --load-checkpoints ./work_dir/OpenCSLR/vac/14/best_model.pt
 ```
 
 
@@ -311,13 +311,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use this framework in your research, please cite:
 
 ```
-@misc{openslr2024,
-  title={OpenSLR: An Open Sign Language Recognition Framework},
-  author={Your Name and Collaborators},
+@misc{OpenCSLR2024,
+  title={OpenCSLR: An Open Continuous Sign Language Recognition Framework},
+  author={Zihang Guo, Jiawei Ren, Hongwei Zhang, Yiming Du, Huaiwen Zhang},
   year={2024},
   publisher={GitHub},
   journal={GitHub repository},
-  howpublished={\url{https://github.com/yourusername/OpenSLR}},
+  howpublished={\url{https://github.com/immc-lab/OpenSLR}},
 }
 ```
 
