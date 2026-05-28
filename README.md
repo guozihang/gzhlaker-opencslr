@@ -256,7 +256,7 @@ python main.py --model models.build_function.build_vac --dataset phoenix2014 --c
 </table>
 
 ## Pretrained Model Weights
-Download Links of the best model weights for 5 state-of-the-art continuous sign language recognition (CSLR) models trained on 3 benchmark datasets:  Phoenix14, and Phoenix14-T, CSL-Daily.
+Below are download links for the best model weights of 5 state-of-the-art continuous sign language recognition (CSLR) models trained on three benchmark datasets: CSL-Daily, Phoenix14 and Phoenix14-T.
 
 ### VAC + SMKD (ICCV 2021) ：
 - Phoenix14:  [download from Baidu Drive](https://pan.baidu.com/s/1XVDlqIVebkLniN6ZvF3xsw?pwd=ytip)
