@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
+from models.keys import Keys, require
 
 class temporal_model(nn.Module):
     def __init__(self, args, conv1d=None):
@@ -46,16 +47,17 @@ class temporal_model(nn.Module):
 
     def forward(self, data):
 
+        require(data, Keys.VISUAL_FEAT, Keys.FEAT_LEN, who="temporal_model")
         outputs = []
 
-        for i in range(len(data["visual_feat"])):
-            tm_outputs = self.temporal_model[i](data["visual_feat"][i], data["feat_len"])
-            outputs.append(self.classifier[i](tm_outputs["predictions"]))
+        for i in range(len(data[Keys.VISUAL_FEAT])):
+            tm_outputs = self.temporal_model[i](data[Keys.VISUAL_FEAT][i], data[Keys.FEAT_LEN])
+            outputs.append(self.classifier[i](tm_outputs[Keys.PREDICTIONS]))
 
 
         return {
-                "sequence_logits": outputs,
-                 "output_first": outputs[0],
+                Keys.SEQUENCE_LOGITS: outputs,
+                Keys.OUTPUT_FIRST: outputs[0],
             }
 
 class NormLinear(nn.Module):
@@ -125,8 +127,8 @@ class BiLSTMLayer(nn.Module):
             hidden = torch.cat(hidden, 0)
 
         return {
-            "predictions": rnn_outputs,
-            "hidden": hidden
+            Keys.PREDICTIONS: rnn_outputs,
+            Keys.HIDDEN: hidden
         }
 
     def _cat_directions(self, hidden):

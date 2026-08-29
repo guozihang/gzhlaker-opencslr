@@ -1,5 +1,6 @@
 import torch.nn as nn
 from .corrnet_tconv import TemporalConv
+from models.keys import Keys, require
 
 class CorrNeT_TemporalConv1D(nn.Module):
     def __init__(self, args):
@@ -13,5 +14,6 @@ class CorrNeT_TemporalConv1D(nn.Module):
         )
 
     def forward(self, data):
-        output = self.conv1d(data['framewise_features'], data['vid_lgt'])
+        require(data, Keys.FRAMEWISE_FEATURES, Keys.VID_LGT, who="CorrNeT_TemporalConv1D")
+        output = self.conv1d(data[Keys.FRAMEWISE_FEATURES], data[Keys.VID_LGT])
         return output

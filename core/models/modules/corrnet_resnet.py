@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 
+from models.keys import Keys, require
+
 __all__ = [
     'ResNet', 'resnet10', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
     'resnet152', 'resnet200', 'CorrNet_ResNet18', 'corrnet_resnet18'
@@ -198,10 +200,9 @@ class CorrNet_ResNet18(nn.Module):
         self.frame_pool = nn.AdaptiveAvgPool3d((None, 1, 1))
 
     def forward(self, data):
-        if 'vid' not in data:
-            raise ValueError("数据中未找到 'vid' 键")
+        require(data, Keys.VID, who="CorrNet_ResNet18")
 
-        vid = data['vid']  # 形状: (B, T, C, H, W)
+        vid = data[Keys.VID]  # 形状: (B, T, C, H, W)
 
         # 转换维度: (B, T, C, H, W) -> (B, C, T, H, W)
         frames = vid.permute(0, 2, 1, 3, 4).contiguous()
@@ -241,8 +242,8 @@ class CorrNet_ResNet18(nn.Module):
         frame_features = frame_features.squeeze(-1).squeeze(-1)  # (B, 512, T)
 
         return {
-            "framewise_features": frame_features,
-            "vid_lgt": data.get("vid_lgt", torch.tensor([T] * B, device=frames.device))
+            Keys.FRAMEWISE_FEATURES: frame_features,
+            Keys.VID_LGT: data.get(Keys.VID_LGT, torch.tensor([T] * B, device=frames.device)),
         }
 
 

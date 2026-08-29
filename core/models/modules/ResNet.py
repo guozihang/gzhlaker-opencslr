@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 from .identity import Identity
+from models.keys import Keys, require
 
 class ResNet( nn.Module ) :
     def __init__ ( self, args) :
@@ -22,8 +23,9 @@ class ResNet( nn.Module ) :
         return x
 
     def forward(self , data) :
-        x = data['vid']
-        len_x = data['vid_lgt']
+        require ( data , Keys.VID , Keys.VID_LGT , who = "ResNet" )
+        x = data[Keys.VID]
+        len_x = data[Keys.VID_LGT]
         if len ( x.shape ) == 5 :
             # videos
             batch , temp , channel , height , width = x.shape
@@ -34,6 +36,5 @@ class ResNet( nn.Module ) :
             # frame-wise features
             framewise = x
         return {
-            "framewise_features": framewise,
-            "visual_features" : x,
+            Keys.FRAMEWISE_FEATURES: framewise,
         }

@@ -6,6 +6,7 @@ from wandb.util import downsample
 from whisper import aggregate
 import torch.utils.model_zoo as model_zoo
 from ..modules.identity import Identity
+from ..keys import Keys, require
 
 model_urls={
     #'resnet18':'https://download.pytorch.org/models/resnet18-f37072fd.pth'
@@ -166,8 +167,8 @@ class SENresnet(nn.Module):
                           for idx , lgt in enumerate ( len_x ) ] )
         return x
     def forward(self,data):
-        x=data['vid']
-        len_x=data['vid_lgt']
+        require(data, Keys.VID, who="SENresnet")
+        x=data[Keys.VID]
         if len(x.shape)==5:
             batch, temp, channel, height, width = x.shape
             framewise = self.conv2d(x.permute(0,2,1,3,4))
@@ -176,8 +177,7 @@ class SENresnet(nn.Module):
         else:
             framewise=x
         return {
-            "framewise_features": framewise,
-            "visual_features": x,
+            Keys.FRAMEWISE_FEATURES: framewise,
         }
 
 

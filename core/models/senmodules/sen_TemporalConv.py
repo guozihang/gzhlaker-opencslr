@@ -3,6 +3,8 @@ import copy
 import torch
 import torch.nn as nn
 
+from ..keys import Keys, require
+
 
 class SENTemporalConv(nn.Module):
     def __init__(self, input_size, hidden_size, conv_type=2, use_bn=False, num_classes=-1, kernel_size=None):
@@ -60,9 +62,9 @@ class SENTemporalConv(nn.Module):
         lgt = self.update_lgt(lgt)
         logits = None if self.num_classes == -1 else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)
         return {
-            "visual_feat": visual_feat.permute(2, 0, 1),
-            "conv_logits": None if logits is None else logits.permute(2, 0, 1),
-            "feat_len": lgt.cpu() if torch.is_tensor(lgt) else lgt,
+            Keys.VISUAL_FEAT: visual_feat.permute(2, 0, 1),
+            Keys.CONV_LOGITS: None if logits is None else logits.permute(2, 0, 1),
+            Keys.FEAT_LEN: lgt.cpu() if torch.is_tensor(lgt) else lgt,
         }
 
 
@@ -80,4 +82,5 @@ class sen_TemporalConv(nn.Module):
         )
 
     def forward(self, data):
-        return self.conv1d(data['framewise_features'], data['vid_lgt'])
+        require(data, Keys.FRAMEWISE_FEATURES, Keys.VID_LGT, who="sen_TemporalConv")
+        return self.conv1d(data[Keys.FRAMEWISE_FEATURES], data[Keys.VID_LGT])

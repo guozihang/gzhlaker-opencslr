@@ -15,6 +15,7 @@ from .dataloader_manager import DataloaderManager
 from .module_manager import ModuleManager
 from .device_manager import DeviceManager
 from pipline.single import seq_train, seq_eval
+from models.keys import Keys
 
 class ExperimentManager:
     # 类变量
@@ -147,9 +148,16 @@ class ExperimentManager:
     @classmethod
     def run_inference(cls, video_data, video_length):
         cls.model.eval()
+        data = {
+            Keys.VID: DeviceManager.to(video_data),
+            Keys.VID_LGT: DeviceManager.to(video_length),
+            # forward 固定执行 loss 容器,推理时填充 dummy label,loss 结果直接丢弃
+            Keys.LABEL: torch.zeros(1, 1, dtype=torch.long),
+            Keys.LABEL_LGT: torch.tensor([1], dtype=torch.long),
+        }
         with torch.no_grad():
-            ret_dict = cls.model(video_data, video_length)
-        return ret_dict['recognized_sents']
+            ret_dict = cls.model(data)
+        return ret_dict[Keys.RECOGNIZED_SENTS]
 
     @classmethod
     def load(cls):

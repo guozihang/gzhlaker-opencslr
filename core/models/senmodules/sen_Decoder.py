@@ -1,6 +1,7 @@
 import torch.nn as nn
 
 from ..modules.decoder import Decode
+from ..keys import Keys, require
 
 
 class sen_Decoder(nn.Module):
@@ -10,9 +11,10 @@ class sen_Decoder(nn.Module):
         self.decoder = Decode(gloss_dict, args["num_classes"], search_mode)
 
     def forward(self, data):
+        require(data, Keys.SEQUENCE_LOGITS, Keys.FEAT_LEN, who="sen_Decoder")
         pred = None
         if not self.training:
-            pred = self.decoder.decode(data["sequence_logits"], data["feat_len"], batch_first=False, probs=False)
+            pred = self.decoder.decode(data[Keys.SEQUENCE_LOGITS], data[Keys.FEAT_LEN], batch_first=False, probs=False)
         return {
-            "recognized_sents": pred
+            Keys.RECOGNIZED_SENTS: pred
         }

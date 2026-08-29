@@ -5,6 +5,7 @@ import torch
 import collections
 import torch.nn as nn
 import torch.nn.functional as F
+from models.keys import Keys, require
 
 
 class TemporalSlowFastConv1D( nn.Module ) :
@@ -18,13 +19,13 @@ class TemporalSlowFastConv1D( nn.Module ) :
 
     def forward(self, data):
 
-        conv1d_outputs = self.conv1d(data['framewise_features'], data['vid_lgt'])
-        lgt = conv1d_outputs['feat_len']
+        require(data, Keys.FRAMEWISE_FEATURES, Keys.VID_LGT, who="TemporalSlowFastConv1D")
+        conv1d_outputs = self.conv1d(data[Keys.FRAMEWISE_FEATURES], data[Keys.VID_LGT])
+        lgt = conv1d_outputs[Keys.FEAT_LEN]
         return{
-            "visual_features": conv1d_outputs['visual_feat'],
-            "visual_feat": conv1d_outputs['visual_feat'],
-            "feat_len": lgt,
-            "conv_logits": conv1d_outputs["conv_logits"],
+            Keys.VISUAL_FEAT: conv1d_outputs[Keys.VISUAL_FEAT],
+            Keys.FEAT_LEN: lgt,
+            Keys.CONV_LOGITS: conv1d_outputs[Keys.CONV_LOGITS],
         }
 
 class TemporalSlowFastFuse(nn.Module):
@@ -118,7 +119,7 @@ class TemporalSlowFastFuse(nn.Module):
         logits = None if self.num_classes == -1 \
             else [self.fc[i](visual_feat[i].transpose(1, 2)).transpose(1, 2) for i in range(num_paths)]
         return {
-            "visual_feat": [visual_feat[i].permute(2, 0, 1) for i in range(num_paths)],
-            "conv_logits": [logits[i].permute(2, 0, 1) for i in range(num_paths)],
-            "feat_len": lgt.cpu(),
+            Keys.VISUAL_FEAT: [visual_feat[i].permute(2, 0, 1) for i in range(num_paths)],
+            Keys.CONV_LOGITS: [logits[i].permute(2, 0, 1) for i in range(num_paths)],
+            Keys.FEAT_LEN: lgt.cpu(),
         }

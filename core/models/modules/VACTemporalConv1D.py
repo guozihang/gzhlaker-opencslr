@@ -1,5 +1,6 @@
 import torch.nn as nn
 from .tconv import VACTemporalConv
+from models.keys import Keys, require
 
 class VACTemporalConv1D ( nn.Module ) :
     def __init__ ( self , args ) :
@@ -14,4 +15,5 @@ class VACTemporalConv1D ( nn.Module ) :
         )
 
     def forward ( self , data) :
-        return self.conv1d ( data['framewise_features'] , data['vid_lgt'] )
+        require ( data , Keys.FRAMEWISE_FEATURES , Keys.VID_LGT , who = "VACTemporalConv1D" )
+        return self.conv1d ( data[Keys.FRAMEWISE_FEATURES] , data[Keys.VID_LGT] )

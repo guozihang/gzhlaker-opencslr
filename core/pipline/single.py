@@ -14,6 +14,7 @@ from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from manager.log_manager import LogManager
 from manager.device_manager import DeviceManager
+from models.keys import Keys
 
 def get_feeder_arg(cfg, key, default=None):
     feeder_args = getattr(cfg, "feeder_args", {}) or {}
@@ -27,16 +28,16 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
     scaler = GradScaler()
     for batch_idx, data in enumerate(tqdm(loader)):
         data = {
-            'vid': DeviceManager.to(data[0]),
-            'vid_lgt': DeviceManager.to(data[1]),
-            'label': DeviceManager.to(data[2]),
-            'label_lgt': DeviceManager.to(data[3])
+            Keys.VID: DeviceManager.to(data[0]),
+            Keys.VID_LGT: DeviceManager.to(data[1]),
+            Keys.LABEL: DeviceManager.to(data[2]),
+            Keys.LABEL_LGT: DeviceManager.to(data[3])
         }
         optimizer.zero_grad()
         with autocast():
             ret_dict = model(data)
-            loss = ret_dict['loss']
-            loss_dict = ret_dict['total_loss']
+            loss = ret_dict[Keys.LOSS]
+            loss_dict = ret_dict[Keys.TOTAL_LOSS]
         if np.isinf(loss.item()) or np.isnan(loss.item()):
             LogManager.info('loss is nan')
             continue
@@ -79,11 +80,11 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
             continue
         try:
             data = {
-                'vid' : DeviceManager.to( data [ 0 ] ) ,
-                'vid_lgt' : DeviceManager.to( data [ 1 ] ) ,
-                'label' : DeviceManager.to( data [ 2 ] ) ,
-                'label_lgt' : DeviceManager.to( data [ 3 ] ),
-                'info': batch_info
+                Keys.VID : DeviceManager.to( data [ 0 ] ) ,
+                Keys.VID_LGT : DeviceManager.to( data [ 1 ] ) ,
+                Keys.LABEL : DeviceManager.to( data [ 2 ] ) ,
+                Keys.LABEL_LGT : DeviceManager.to( data [ 3 ] ),
+                Keys.INFO: batch_info
             }
             with torch.no_grad():
                 ret_dict = model(data)
@@ -97,8 +98,8 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
                 continue
             raise
 
-        total_info += [file_name.split("|")[0] for file_name in data['info']]
-        total_sent += ret_dict['recognized_sents']
+        total_info += [file_name.split("|")[0] for file_name in data[Keys.INFO]]
+        total_sent += ret_dict[Keys.RECOGNIZED_SENTS]
     try:
         LogManager.info(work_dir)
         write2file(work_dir + "output-hypothesis-{}.ctm".format(mode), total_info, total_sent)

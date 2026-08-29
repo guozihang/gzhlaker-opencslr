@@ -4,6 +4,7 @@ import torch
 import collections
 import torch.nn as nn
 import torch.nn.functional as F
+from models.keys import Keys
 
 class Temporal_LiftPool(nn.Module):
     def __init__(self, input_size, kernel_size=2):
@@ -119,11 +120,11 @@ class TemporalConv(nn.Module):
         logits = None if self.num_classes == -1 \
             else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)
         return {
-            "visual_feat": visual_feat.permute(2, 0, 1),
-            "conv_logits": logits.permute(2, 0, 1),
-            "feat_len": lgt.cpu(),
-            "loss_LiftPool_u": loss_LiftPool_u,
-            "loss_LiftPool_p": loss_LiftPool_p,
+            Keys.VISUAL_FEAT: visual_feat.permute(2, 0, 1),
+            Keys.CONV_LOGITS: logits.permute(2, 0, 1),
+            Keys.FEAT_LEN: lgt.cpu(),
+            Keys.LOSS_LIFTPOOL_U: loss_LiftPool_u,
+            Keys.LOSS_LIFTPOOL_P: loss_LiftPool_p,
         }
 
 class VACTemporalConv(nn.Module):
@@ -167,7 +168,7 @@ class VACTemporalConv(nn.Module):
         logits = None if self.num_classes == -1 \
             else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)
         return {
-            "visual_feat": visual_feat.permute(2, 0, 1),
-            "conv_logits": logits.permute(2, 0, 1),
-            "feat_len": lgt.cpu(),
+            Keys.VISUAL_FEAT: visual_feat.permute(2, 0, 1),
+            Keys.CONV_LOGITS: logits.permute(2, 0, 1),
+            Keys.FEAT_LEN: lgt.cpu(),
         }

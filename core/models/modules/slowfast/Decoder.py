@@ -6,6 +6,7 @@ import ctcdecode
 import numpy as np
 from itertools import groupby
 import torch.nn.functional as F
+from models.keys import Keys, require
 
 class SlowFast_Decoder:
     def __init__(self, args, gloss_dict):
@@ -14,12 +15,13 @@ class SlowFast_Decoder:
 
     def __call__(self, data):
 
-        pred = self.decoder.decode(data["output_first"], data["feat_len"], batch_first=False, probs=False)
-        conv_pred = self.decoder.decode(data['conv_logits'][0], data["feat_len"], batch_first=False, probs=False)
+        require(data, Keys.OUTPUT_FIRST, Keys.CONV_LOGITS, Keys.FEAT_LEN, who="SlowFast_Decoder")
+        pred = self.decoder.decode(data[Keys.OUTPUT_FIRST], data[Keys.FEAT_LEN], batch_first=False, probs=False)
+        conv_pred = self.decoder.decode(data[Keys.CONV_LOGITS][0], data[Keys.FEAT_LEN], batch_first=False, probs=False)
 
         return {
-            "conv_sents": conv_pred,
-            "recognized_sents": pred,
+            Keys.CONV_SENTS: conv_pred,
+            Keys.RECOGNIZED_SENTS: pred,
         }
 
 class Decode(object):

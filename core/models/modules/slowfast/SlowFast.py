@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 from models.modules.slowfast.slowfast_modules import slowfast
+from models.keys import Keys, require
 
 class SlowFast(nn.Module):
     def __init__(self, args):
@@ -46,7 +47,8 @@ class SlowFast(nn.Module):
         return x
 
     def forward(self, data):
-        x = data['vid']
+        require(data, Keys.VID, who="SlowFast")
+        x = data[Keys.VID]
 
         if len(x.shape) == 5:
             framewise = self.conv2d(x.permute(0, 2, 1, 3, 4))
@@ -54,5 +56,5 @@ class SlowFast(nn.Module):
             # frame-wise features
             framewise = x
         return {
-            "framewise_features": framewise,
+            Keys.FRAMEWISE_FEATURES: framewise,
         }

@@ -1,6 +1,7 @@
 import torch
 import ctcdecode
 from itertools import groupby
+from models.keys import Keys, require
 
 
 class Decode(object):
@@ -66,7 +67,8 @@ class Decoder:
         super ( Decoder , self ).__init__ ( )
         self.decoder = Decode ( gloss_dict , args["num_classes"] , 'beam' )
     def __call__ ( self , data) :
-        pred = self.decoder.decode ( data["sequence_logits"] , data["feat_len"] , batch_first = False , probs = False )
+        require ( data , Keys.SEQUENCE_LOGITS , Keys.FEAT_LEN , who = "Decoder" )
+        pred = self.decoder.decode ( data[Keys.SEQUENCE_LOGITS] , data[Keys.FEAT_LEN] , batch_first = False , probs = False )
         return {
-            "recognized_sents": pred
+            Keys.RECOGNIZED_SENTS: pred
         }

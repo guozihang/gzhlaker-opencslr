@@ -1,5 +1,6 @@
 import torch.nn as nn
 from .BiLSTM import BiLSTMLayer
+from models.keys import Keys, require
 
 class BiLSTM( nn.Module ) :
     def __init__ ( self , args) :
@@ -13,4 +14,5 @@ class BiLSTM( nn.Module ) :
         )
 
     def forward ( self , data) :
-        return self.temporal_model ( data [ 'visual_feat' ] , data [ 'feat_len' ] )
+        require ( data , Keys.VISUAL_FEAT , Keys.FEAT_LEN , who = "BiLSTM" )
+        return self.temporal_model ( data [ Keys.VISUAL_FEAT ] , data [ Keys.FEAT_LEN ] )

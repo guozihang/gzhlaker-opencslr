@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
+from models.keys import Keys, require
 
 
 class NormLinear(nn.Module):
@@ -38,11 +39,9 @@ class slowfast_classifier(nn.Module):
             self.conv1d.fc = nn.ModuleList([classifier for i in range(3)])
 
     def forward(self, data):
-        print()
-        print(f"slowfast_classifer_debug:data keys: {data.keys()}")
+        require(data, Keys.PREDICTIONS, who="slowfast_classifier")
 
-        predictions = data['predictions']
-        print(f"predictions type: {type(predictions)}")
+        predictions = data[Keys.PREDICTIONS]
 
         # 如果 predictions 是列表, 对每个预测执行分类器
         if isinstance(predictions, list):
@@ -52,5 +51,5 @@ class slowfast_classifier(nn.Module):
             sequence_logits = self.classifier[0](predictions)
 
         return {
-            "sequence_logits": sequence_logits
+            Keys.SEQUENCE_LOGITS: sequence_logits
         }

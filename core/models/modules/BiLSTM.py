@@ -2,6 +2,7 @@ import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from models.keys import Keys
 
 
 class BiLSTMLayer(nn.Module):
@@ -60,8 +61,8 @@ class BiLSTMLayer(nn.Module):
             hidden = torch.cat(hidden, 0)
 
         return {
-            "predictions": rnn_outputs,
-            "hidden": hidden
+            Keys.PREDICTIONS: rnn_outputs,
+            Keys.HIDDEN: hidden
         }
 
     def _cat_directions(self, hidden):
