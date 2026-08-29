@@ -240,3 +240,7 @@ Icon[]
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# 预训练权重,超出 GitHub 100MB 单文件限制
+core/models/modules/slowfast/slowfast_modules/ckpt/
+*.pkl
