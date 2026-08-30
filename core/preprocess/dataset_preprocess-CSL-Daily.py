@@ -1,3 +1,9 @@
+"""Preprocessing script for CSL-Daily dataset.
+
+Parses annotation files, generates information dictionaries per split,
+builds a gloss dictionary, creates ground truth STM files for evaluation,
+and optionally resizes images to a target resolution.
+"""
 import re
 import os
 import cv2
@@ -12,6 +18,15 @@ from multiprocessing import Pool
 
 
 def csv2dict(dataset_root, anno_path):
+    """Parse CSL-Daily annotation file into a sample information dictionary.
+
+    Args:
+        dataset_root: Root path of the dataset.
+        anno_path: Path to the annotation text file.
+
+    Returns:
+        Dictionary mapping sample indices to file info dicts.
+    """
     with open(anno_path, 'r', encoding='utf-8') as f:
         inputs_list = f.readlines()
     info_dict = dict()
@@ -31,6 +46,12 @@ def csv2dict(dataset_root, anno_path):
 
 
 def generate_gt_stm(info, save_path):
+    """Generate ground truth STM file for evaluation.
+
+    Args:
+        info: Dictionary of sample information.
+        save_path: Path to save the STM file.
+    """
     with open(save_path, "w") as f:
         for k, v in info.items():
             if not isinstance(k, int):
@@ -39,6 +60,15 @@ def generate_gt_stm(info, save_path):
 
 
 def sign_dict_update(total_dict, info):
+    """Update gloss frequency dictionary with labels from a sample info dict.
+
+    Args:
+        total_dict: Dictionary mapping gloss strings to their frequency count.
+        info: Sample information dictionary.
+
+    Returns:
+        Updated total_dict with incremented gloss counts.
+    """
     for k, v in info.items():
         if not isinstance(k, int):
             continue
@@ -52,6 +82,15 @@ def sign_dict_update(total_dict, info):
 
 
 def resize_img(img_path, dsize='210x260px'):
+    """Resize an image to the specified resolution.
+
+    Args:
+        img_path: Path to the input image.
+        dsize: Target resolution string, e.g. '256x256px'.
+
+    Returns:
+        Resized image as a numpy array, or None if the image is unreadable.
+    """
     dsize = tuple(int(res) for res in re.findall("\d+", dsize))
     img = cv2.imread(img_path)
     if img is None:
@@ -62,6 +101,15 @@ def resize_img(img_path, dsize='210x260px'):
 
 
 def resize_dataset(video_idx, dsize, info_dict, dataset_root, target_path):
+    """Resize all images for a single video sample.
+
+    Args:
+        video_idx: Index of the video in the info_dict.
+        dsize: Target resolution string, e.g. '256x256px'.
+        info_dict: Dictionary of sample information.
+        dataset_root: Root path of the original dataset.
+        target_path: Target path for resized images.
+    """
     info = info_dict[video_idx]
     img_list = glob.glob(f"{dataset_root}/{info['folder']}")
     if len(img_list) == len(glob.glob(f"{target_path}/{info['folder']}")):
@@ -81,12 +129,31 @@ def resize_dataset(video_idx, dsize, info_dict, dataset_root, target_path):
 
 
 def run_mp_cmd(processes, process_func, process_args):
+    """Run a function in parallel using multiprocessing.
+
+    Args:
+        processes: Number of processes in the pool.
+        process_func: Function to apply to each argument.
+        process_args: Iterable of arguments for the function.
+
+    Returns:
+        List of outputs from the function calls.
+    """
     with Pool(processes) as p:
         outputs = list(tqdm(p.imap(process_func, process_args), total=len(process_args)))
     return outputs
 
 
 def run_cmd(func, args):
+    """Run a single function call (serial fallback for multiprocessing).
+
+    Args:
+        func: Function to call.
+        args: Argument to pass to the function.
+
+    Returns:
+        Output from the function call.
+    """
     return func(args)
 
 

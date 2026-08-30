@@ -1,4 +1,10 @@
 # -*- encoding: utf-8 -*-
+"""Dataset manager module for OpenCSLR.
+
+Handles dataset loading, gloss dictionary management, and dataset instance
+creation for training, validation, and test splits.
+"""
+
 import importlib
 
 import numpy as np
@@ -16,6 +22,12 @@ class DatasetManager:
 
     @classmethod
     def init(cls):
+        """Initialize dataset instances for all splits.
+
+        Loads the gloss dictionary, creates the dataset class, and instantiates
+        dataset objects for train, train_eval, dev, and test modes. Also sets
+        the number of classes in model arguments.
+        """
         arg = ArgumentManager.get( )
         cls.DATASET_CLASS = import_class(arg.feeder)
         cls.GLOSS_DICT = np.load (
@@ -42,22 +54,53 @@ class DatasetManager:
 
     @classmethod
     def get(cls, mode="train"):
+        """Get the dataset instance for the specified mode.
+
+        Args:
+            mode: Dataset mode, one of "train", "train_eval", "dev", "test"
+
+        Returns:
+            Dataset: The requested dataset instance
+        """
         return cls.DATASET_OBJECT[mode]
 
     @classmethod
     def get_vocabulary_count(cls):
+        """Get the vocabulary size (number of gloss classes plus one for blank).
+
+        Returns:
+            int: Vocabulary size
+        """
         return len(cls.GLOSS_DICT) + 1
 
     @classmethod
     def get_dataset_list(cls):
+        """Get the list of dataset modes and their training flags.
+
+        Returns:
+            list: List of (mode, train_flag) tuples
+        """
         return cls.DATASET_LIST
 
     @classmethod
     def get_gloss_dict(cls):
+        """Get the gloss dictionary mapping gloss indices to labels.
+
+        Returns:
+            dict: The gloss dictionary
+        """
         return cls.GLOSS_DICT
 
 
 def import_class(name):
+    """Dynamically import a class by its fully qualified name.
+
+    Args:
+        name: Fully qualified class name, e.g. "dataloader_video.BaseFeeder"
+
+    Returns:
+        class: The imported class
+    """
     components = name.rsplit('.', 1)
     mod = importlib.import_module(components[-2])
     mod = getattr(mod, components[-1])

@@ -1,8 +1,24 @@
+"""SEN 模型的损失函数模块。
+
+计算 CTC 损失（用于卷积层和序列层输出）以及知识蒸馏损失，
+支持多任务学习中的加权组合。
+"""
 import torch
 from torch import nn
 from ..modules.criterions import SeqKD
 from ..keys import Keys, require
+
+
 class SENLoss(nn.Module):
+    """SEN 损失函数模块。
+
+    计算 CTC 损失（ConvCTC 和 SeqCTC）以及知识蒸馏损失（Dist），
+    并根据给定的权重对各项损失进行加权求和。
+
+    Args:
+        loss_weights: 字典，包含各损失项的权重，如 {'ConvCTC': 1.0, 'SeqCTC': 1.0, 'Dist': 0.5}
+    """
+
     def __init__(self,loss_weights):
         super(SENLoss,self).__init__()
         self.loss={}
@@ -10,6 +26,14 @@ class SENLoss(nn.Module):
         self.loss['CTCLoss']=nn.CTCLoss(reduction='none',zero_infinity=False)
         self.loss['Distillation']=SeqKD(T=8)
     def forward(self,data):
+        """前向传播（计算损失）。
+
+        Args:
+            data: 包含 CONV_LOGITS, SEQUENCE_LOGITS, LABEL, FEAT_LEN, LABEL_LGT 的字典
+
+        Returns:
+            dict: 包含总损失和各项损失明细的字典
+        """
         require(data, Keys.CONV_LOGITS, Keys.SEQUENCE_LOGITS, Keys.LABEL, Keys.FEAT_LEN, Keys.LABEL_LGT,
                 who="SENLoss")
         loss=0

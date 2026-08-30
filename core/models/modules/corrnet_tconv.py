@@ -1,3 +1,8 @@
+"""CorrNet 时序卷积模块。
+
+提供多尺度时序卷积和标准时序卷积，用于 CorrNet 模型中的时序特征建模。
+"""
+
 import pdb
 import copy
 import torch
@@ -5,7 +10,20 @@ import collections
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class MultiScale_TemporalConv(nn.Module):
+    """多尺度时序卷积模块。
+
+    使用多个不同膨胀率的并行卷积分支，分别处理后再拼接输出，
+    捕获不同时间尺度的时序依赖关系。
+
+    Args:
+        in_channels: 输入通道数。
+        out_channels: 输出通道数。
+        kernel_size: 卷积核大小（默认 3）。
+        dilations: 各分支的膨胀率列表（默认 [1,2,3,4]）。
+    """
+
     def __init__(self, in_channels, out_channels, kernel_size=3, dilations=[1,2,3,4],):
 
         super().__init__()
@@ -32,6 +50,16 @@ class MultiScale_TemporalConv(nn.Module):
         #self.bn = nn.BatchNorm1d(out_channels)
 
     def forward(self, x):
+        """前向传播。
+
+        通过多个膨胀卷积分支并行处理输入，拼接各分支输出。
+
+        Args:
+            x: 输入特征，形状 (N, C, T)
+
+        Returns:
+            torch.Tensor: 拼接后的多尺度特征，形状 (N, out_channels, T)
+        """
         # Input dim: (N,C,T,V)
         branch_outs = []
         for tempconv in self.branches:
@@ -46,6 +74,19 @@ class MultiScale_TemporalConv(nn.Module):
 
 
 class TemporalConv(nn.Module):
+    """CorrNet 时序卷积模块。
+
+    根据 conv_type 配置构建不同结构的时序卷积网络，支持卷积和池化层的组合。
+    可选最后的全连接分类头输出中间 logits。
+
+    Args:
+        input_size: 输入特征维度。
+        hidden_size: 隐藏层特征维度。
+        conv_type: 卷积类型（0-8），决定 kernel_size 配置。
+        use_bn: 是否使用批归一化（当前未使用）。
+        num_classes: 分类数，-1 表示不添加分类头。
+    """
+
     def __init__(self, input_size, hidden_size, conv_type=2, use_bn=False, num_classes=-1):
         super(TemporalConv, self).__init__()
         self.use_bn = use_bn
@@ -91,6 +132,14 @@ class TemporalConv(nn.Module):
             self.fc = nn.Linear(self.hidden_size, self.num_classes)
 
     def update_lgt(self, lgt):
+        """根据卷积和池化操作更新特征长度。
+
+        Args:
+            lgt: 原始特征长度
+
+        Returns:
+            torch.Tensor: 更新后的特征长度
+        """
         feat_len = copy.deepcopy(lgt)
         for ks in self.kernel_size:
             if ks[0] == 'P':
@@ -101,7 +150,18 @@ class TemporalConv(nn.Module):
         return feat_len
 
     def forward(self, frame_feat, lgt):
-        visual_feat = self.temporal_conv(frame_feat)
+        """前向传播。
+
+        依次通过时序卷积层处理帧级特征，更新特征长度，
+        并可选输出分类 logits。
+
+        Args:
+            frame_feat: 帧级特征，形状 (B, C, T)
+            lgt: 每个样本的实际长度
+
+        Returns:
+            dict: 包含视觉特征、卷积 logits 和特征长度
+        """
         lgt = self.update_lgt(lgt)
         logits = None if self.num_classes == -1 \
             else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)

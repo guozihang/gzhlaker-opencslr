@@ -7,7 +7,26 @@ import torchvision.models as models
 from models.modules.slowfast.slowfast_modules import slowfast
 from models.keys import Keys, require
 
+"""SlowFast backbone for sign language recognition.
+
+Implements the SlowFast video architecture as a spatial feature extractor,
+supporting various C2D backbones (e.g., SlowFast, I3D) for video-based
+sign language recognition.
+"""
+
+
 class SlowFast(nn.Module):
+    """SlowFast backbone wrapper for video feature extraction.
+
+    Wraps the SlowFast or C2D video backbone and processes video frames
+    to extract frame-wise visual features. Supports both 5D video tensors
+    and pre-extracted features.
+
+    Args:
+        args: Configuration dictionary containing model parameters such as
+              c2d_type, slowfast_config, slowfast_args, and num_classes.
+    """
+
     def __init__(self, args):
         super(SlowFast, self).__init__()
 
@@ -37,6 +56,19 @@ class SlowFast(nn.Module):
         self.conv2d = builder(**builder_kwargs)
 
     def masked_bn(self, inputs, len_x):
+        """Apply masked batch normalization with variable-length inputs.
+
+        Handles batches where each sample has a different temporal length
+        by applying the backbone to each sample individually and padding
+        the results back to uniform length.
+
+        Args:
+            inputs: Input tensor.
+            len_x: List of lengths for each sample in the batch.
+
+        Returns:
+            Tensor: Output after batch normalization, padded to uniform length.
+        """
         def pad(tensor, length):
             return torch.cat([tensor, tensor.new(length - tensor.size(0), *tensor.size()[1:]).zero_()])
 
@@ -47,6 +79,18 @@ class SlowFast(nn.Module):
         return x
 
     def forward(self, data):
+        """Forward pass of SlowFast backbone.
+
+        Extracts frame-wise features from video input. Supports both
+        raw video tensors (5D with shape N,C,T,H,W) and pre-extracted
+        features.
+
+        Args:
+            data: Dict containing Keys.VID with video tensor.
+
+        Returns:
+            dict: Dict containing Keys.FRAMEWISE_FEATURES.
+        """
         require(data, Keys.VID, who="SlowFast")
         x = data[Keys.VID]
 

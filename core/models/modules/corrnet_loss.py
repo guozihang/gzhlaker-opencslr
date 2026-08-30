@@ -1,3 +1,8 @@
+"""CorrNet 损失函数模块。
+
+支持 CTC 损失和知识蒸馏损失的加权组合，用于 CorrNet 模型的训练。
+"""
+
 import torch
 import torch.nn as nn
 from .criterions import SeqKD
@@ -5,6 +10,17 @@ from models.keys import Keys, require
 
 
 class CorrNetLoss(nn.Module):
+    """CorrNet 模型的损失函数模块。
+
+    根据损失权重字典，组合计算 CTC 损失（ConvCTC、SeqCTC）
+    和知识蒸馏损失（Dist）。
+
+    Args:
+        loss_weights: 字典，键为损失名称，值为对应权重。
+            支持的键: "ConvCTC", "SeqCTC", "Dist"
+        blank_id: CTC 空白标记的索引（默认 0）。
+    """
+
     def __init__(self, loss_weights, blank_id=0):
         super().__init__()
         self.loss_weights = loss_weights
@@ -17,6 +33,21 @@ class CorrNetLoss(nn.Module):
         self.loss["distillation"] = SeqKD(T=8)
 
     def forward(self, data):
+        """前向传播计算损失。
+
+        根据损失权重配置，从数据字典中读取相应数据并计算各项损失。
+
+        Args:
+            data: 数据字典，需包含:
+                Keys.CONV_LOGITS: 卷积层输出 logits
+                Keys.SEQUENCE_LOGITS: 序列模型输出 logits
+                Keys.LABEL: 真实标签
+                Keys.FEAT_LEN: 特征长度
+                Keys.LABEL_LGT: 标签长度
+
+        Returns:
+            dict: 包含 Keys.LOSS（总损失）和 Keys.TOTAL_LOSS（各分项损失字典）
+        """
         require(data, Keys.CONV_LOGITS, Keys.SEQUENCE_LOGITS, Keys.LABEL, Keys.FEAT_LEN, Keys.LABEL_LGT,
                 who="CorrNetLoss")
         loss = 0

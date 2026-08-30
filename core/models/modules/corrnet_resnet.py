@@ -1,3 +1,9 @@
+"""CorrNet 增强的 3D ResNet 骨干网络，用于空间特征提取。
+
+在标准 ResNet 的层间插入相关性建模模块（Correlation Module），
+通过帧间相关性建模增强视频特征表示，适用于连续手语识别。
+"""
+
 import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
@@ -20,6 +26,15 @@ model_urls = {
 
 
 class Get_Correlation(nn.Module):
+    """相关性计算模块（Correlation Module）。
+
+    通过帧间注意力机制计算视频帧之间的相关性，并结合多尺度空间聚合
+    的识别模块，增强特征表示。
+
+    Args:
+        channels: 输入特征通道数。
+    """
+
     def __init__(self, channels):
         super().__init__()
         reduction_channel = channels // 16
@@ -37,6 +52,16 @@ class Get_Correlation(nn.Module):
         self.conv_back = nn.Conv3d(reduction_channel, channels, kernel_size=1, bias=False)
 
     def forward(self, x):
+        """前向传播。
+
+        计算帧间相关性和多尺度空间聚合特征，输出增强的特征。
+
+        Args:
+            x: 输入特征，形状 (B, C, T, H, W)
+
+        Returns:
+            torch.Tensor: 相关性增强的特征，形状与输入相同
+        """
         # 相关性计算 (Correlation Module)
         x2 = self.down_conv2(x)
         affinities = torch.einsum('bcthw,bctsd->bthwsd', x, torch.concat([x2[:, :, 1:], x2[:, :, -1:]], 2))
@@ -58,6 +83,16 @@ class Get_Correlation(nn.Module):
 
 
 def conv3x3(in_planes, out_planes, stride=1):
+    """创建 3x3 的 3D 卷积层（时序维度为 1）。
+
+    Args:
+        in_planes: 输入通道数。
+        out_planes: 输出通道数。
+        stride: 空间维度的步长。
+
+    Returns:
+        nn.Conv3d: 配置好的卷积层。
+    """
     return nn.Conv3d(
         in_planes,
         out_planes,
@@ -68,6 +103,18 @@ def conv3x3(in_planes, out_planes, stride=1):
 
 
 class BasicBlock(nn.Module):
+    """ResNet 基本残差块（3D 版本）。
+
+    由两个 3x3 卷积层组成，包含批归一化和 ReLU 激活，
+    通过残差连接缓解梯度消失问题。
+
+    Args:
+        inplanes: 输入通道数。
+        planes: 中间和输出通道数。
+        stride: 卷积步长。
+        downsample: 可选的下采样层，用于匹配残差连接的维度。
+    """
+
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
@@ -81,6 +128,14 @@ class BasicBlock(nn.Module):
         self.stride = stride
 
     def forward(self, x):
+        """前向传播。
+
+        Args:
+            x: 输入特征，形状 (B, C, T, H, W)
+
+        Returns:
+            torch.Tensor: 残差块输出特征，形状与输入相同（通道数可能变化）
+        """
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
@@ -97,6 +152,18 @@ class BasicBlock(nn.Module):
 
 
 class ResNet(nn.Module):
+    """CorrNet 增强的 3D ResNet 网络。
+
+    在标准 ResNet 的 layer2、layer3、layer4 之后分别插入
+    Get_Correlation 模块，通过可学习的 alpha 参数控制相关性
+    增强的强度，初始为 0（无增强效果）。
+
+    Args:
+        block: 残差块类型（如 BasicBlock）。
+        layers: 每个阶段的残差块数量列表。
+        num_classes: 分类数（默认 1000）。
+    """
+
     def __init__(self, block, layers, num_classes=1000):
         self.inplanes = 64
         super(ResNet, self).__init__()
@@ -123,6 +190,19 @@ class ResNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def _make_layer(self, block, planes, blocks, stride=1):
+        """构建 ResNet 的一个阶段。
+
+        由多个残差块组成，可选择下采样以匹配通道数和空间尺寸。
+
+        Args:
+            block: 残差块类型。
+            planes: 输出通道数。
+            blocks: 残差块数量。
+            stride: 第一个残差块的卷积步长。
+
+        Returns:
+            nn.Sequential: 包含多个残差块的顺序容器。
+        """
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -139,6 +219,18 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        """前向传播。
+
+        依次通过卷积层、池化层和四个残差阶段，
+        在 layer2、layer3、layer4 后插入相关性增强，
+        最后通过全局平均池化和全连接层输出分类结果。
+
+        Args:
+            x: 输入视频，形状 (N, C, T, H, W)
+
+        Returns:
+            torch.Tensor: 分类输出，形状 (N, num_classes)
+        """
         N, C, T, H, W = x.size()
         x = self.conv1(x)
         x = self.bn1(x)
@@ -164,6 +256,17 @@ class ResNet(nn.Module):
 
 
 def resnet18(**kwargs):
+    """构建 ResNet-18 模型并加载预训练权重。
+
+    加载 2D ResNet-18 的 ImageNet 预训练权重，将卷积层权重扩展为 3D，
+    过滤掉分类层权重以保持特征提取能力。
+
+    Args:
+        **kwargs: 传递给 ResNet 构造函数的额外参数。
+
+    Returns:
+        ResNet: 加载了预训练权重的 ResNet-18 模型。
+    """
     """Constructs a ResNet-18 based model."""
     model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
     checkpoint = model_zoo.load_url(model_urls['resnet18'])
@@ -183,6 +286,16 @@ def resnet18(**kwargs):
 
 
 class CorrNet_ResNet18(nn.Module):
+    """CorrNet 增强的 ResNet18 空间特征提取模块。
+
+    使用 CorrNet 增强的 ResNet18 提取帧级视觉特征。
+    移除原始 ResNet 的分类层和全局池化，替换为自适应池化以输出帧级特征。
+    按顺序执行每层前向传播，在 layer2、layer3、layer4 之后插入相关性增强。
+
+    Args:
+        args: 配置字典，可包含 "num_classes"（预训练所需，默认 1000）。
+    """
+
     def __init__(self, args):
         super(CorrNet_ResNet18, self).__init__()
         # 加载原始CorrNet ResNet18
@@ -200,6 +313,19 @@ class CorrNet_ResNet18(nn.Module):
         self.frame_pool = nn.AdaptiveAvgPool3d((None, 1, 1))
 
     def forward(self, data):
+        """前向传播。
+
+        从数据字典中读取视频，执行 CorrNet 增强的 ResNet18 前向传播，
+        输出帧级特征。
+
+        Args:
+            data: 数据字典，需包含:
+                Keys.VID: 视频帧，形状 (B, T, C, H, W)
+                Keys.VID_LGT: 每个视频的实际帧数（可选）
+
+        Returns:
+            dict: 包含 Keys.FRAMEWISE_FEATURES 和 Keys.VID_LGT 的字典
+        """
         require(data, Keys.VID, who="CorrNet_ResNet18")
 
         vid = data[Keys.VID]  # 形状: (B, T, C, H, W)
@@ -248,14 +374,34 @@ class CorrNet_ResNet18(nn.Module):
 
 
 def corrnet_resnet18(args):
+    """CorrNet_ResNet18 的工厂函数。
+
+    Args:
+        args: 配置字典。
+
+    Returns:
+        CorrNet_ResNet18: 构建好的模型实例。
+    """
     return CorrNet_ResNet18(args)
 
 
 def corrnet_resnet18(args):
+    """CorrNet_ResNet18 的工厂函数（别名）。
+
+    Args:
+        args: 配置字典。
+
+    Returns:
+        CorrNet_ResNet18: 构建好的模型实例。
+    """
     return CorrNet_ResNet18(args)
 
 
 def test():
+    """测试 CorrNet_ResNet18 的前向传播。
+
+    创建模型实例，输入随机视频数据，验证输出特征形状正确。
+    """
     # 测试CorrNet版本的ResNet
     net = CorrNet_ResNet18({})
     test_data = {

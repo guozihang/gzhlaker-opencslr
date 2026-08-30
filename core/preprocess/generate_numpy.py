@@ -1,5 +1,8 @@
 # # 生成缓存
+"""临时脚本：将 phoenix2014/T/CSL-Daily 数据集的特征提取为 pickle 格式缓存。
 
+注意：此文件仅用于一次性数据准备，包含硬编码路径，不应在训练中导入。
+"""
 import os
 import torch
 import torch.nn as nn

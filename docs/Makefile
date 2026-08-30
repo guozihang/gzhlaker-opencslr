@@ -12,7 +12,12 @@ BUILDDIR      = build
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
-.PHONY: help Makefile
+# Regenerate the API reference pages from source comments/docstrings.
+# Deterministic, stdlib-only: python docs/tools/gen_api_docs.py
+gen-api:
+	python3 tools/gen_api_docs.py
+
+.PHONY: help Makefile gen-api
 
 # Catch-all target: route all unknown targets to Sphinx using the new
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).

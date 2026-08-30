@@ -1,11 +1,24 @@
+"""Loss functions for CSLR models.
+
+Provides sequence-level loss functions including knowledge distillation
+loss with label smoothing (SeqKD).
+"""
+
 import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class SeqKD(nn.Module):
     """
-    NLL loss with label smoothing.
+    NLL loss with label smoothing via knowledge distillation.
+
+    Computes KL divergence between the student's log-probabilities and
+    the teacher's soft probabilities, scaled by temperature T.
+
+    Args:
+        T: Temperature for softening the probability distributions (default 1).
     """
 
     def __init__(self, T=1):
@@ -14,6 +27,16 @@ class SeqKD(nn.Module):
         self.T = T
 
     def forward(self, prediction_logits, ref_logits, use_blank=True):
+        """Compute distillation loss.
+
+        Args:
+            prediction_logits: Student network logits, shape (B, T, N).
+            ref_logits: Teacher network logits, shape (B, T, N).
+            use_blank: If True, include blank class in loss computation.
+
+        Returns:
+            torch.Tensor: Scalar distillation loss.
+        """
         start_idx = 0 if use_blank else 1
         prediction_logits = F.log_softmax(prediction_logits[:, :, start_idx:]/self.T, dim=-1) \
             .view(-1, ref_logits.shape[2] - start_idx)

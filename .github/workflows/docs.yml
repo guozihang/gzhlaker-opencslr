@@ -1,0 +1,52 @@
+name: Docs
+
+# 当 main 分支有 push 时自动构建文档并部署到 GitHub Pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 只允许一个并发部署，新 push 会取消旧的
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Sphinx & theme
+        run: pip install sphinx sphinx_rtd_theme
+
+      - name: Generate API RST from source comments
+        run: python docs/tools/gen_api_docs.py
+
+      - name: Build HTML
+        run: make -C docs html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/build/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

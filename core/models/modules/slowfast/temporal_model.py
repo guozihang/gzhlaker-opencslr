@@ -5,7 +5,24 @@ import torch.nn.functional as F
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
 from models.keys import Keys, require
 
+"""SlowFast 时序模型模块。
+
+使用双向 LSTM 对 SlowFast 提取的特征进行时序建模，
+并支持权重归一化和分类器共享机制。
+"""
+
+
 class temporal_model(nn.Module):
+    """SlowFast 时序模型。
+
+    使用三个独立的 BiLSTM 层分别对 SlowFast 的三个路径（主路径、慢路径、快路径）
+    进行时序建模，并可选地使用权重归一化或分类器共享机制。
+
+    Args:
+        args: 配置字典，包含 hidden_size, num_classes, weight_norm, share_classifier 等
+        conv1d: 可选的 TemporalSlowFastConv1D 模块，用于替换分类器
+    """
+
     def __init__(self, args, conv1d=None):
         super(temporal_model, self).__init__()
         #原来的temporal_model
@@ -47,6 +64,15 @@ class temporal_model(nn.Module):
 
     def forward(self, data):
 
+        """前向传播。
+
+        Args:
+            data: 包含 Keys.VISUAL_FEAT 和 Keys.FEAT_LEN 的字典
+
+        Returns:
+            dict: 包含 SEQUENCE_LOGITS 和 OUTPUT_FIRST 的字典
+        """
+
         require(data, Keys.VISUAL_FEAT, Keys.FEAT_LEN, who="temporal_model")
         outputs = []
 
@@ -61,17 +87,51 @@ class temporal_model(nn.Module):
             }
 
 class NormLinear(nn.Module):
+    """权重归一化的线性层。
+
+    使用 L2 归一化对权重矩阵进行归一化处理，
+    然后执行矩阵乘法，替代标准的线性变换。
+
+    Args:
+        in_dim: 输入特征维度
+        out_dim: 输出特征维度
+    """
+
     def __init__(self, in_dim, out_dim):
         super(NormLinear, self).__init__()
         self.weight = nn.Parameter(torch.Tensor(in_dim, out_dim))
         nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
 
     def forward(self, x):
+        """前向传播。
+
+        Args:
+            x: 输入张量，形状为 (..., in_dim)
+
+        Returns:
+            Tensor: 输出张量，形状为 (..., out_dim)
+        """
         outputs = torch.matmul(x, F.normalize(self.weight, dim=0))
         return outputs
 
 
 class BiLSTMLayer(nn.Module):
+    """双向 LSTM 层。
+
+    使用双向 LSTM/GRU 对序列数据进行时序建模，
+    支持变长序列处理（通过 pack_padded_sequence）。
+
+    Args:
+        input_size: 输入特征维度
+        hidden_size: 隐藏层特征维度
+        num_layers: LSTM 层数
+        dropout: Dropout 概率
+        bidirectional: 是否使用双向 LSTM
+        rnn_type: RNN 类型（'LSTM' 或 'GRU'）
+        num_classes: 分类数，-1 表示不输出分类结果
+        debug: 是否启用调试模式
+    """
+
     def __init__(self, input_size, debug=False, hidden_size=512, num_layers=1, dropout=0.3,
                  bidirectional=True, rnn_type='LSTM', num_classes=-1):
         super(BiLSTMLayer, self).__init__()
@@ -132,22 +192,16 @@ class BiLSTMLayer(nn.Module):
         }
 
     def _cat_directions(self, hidden):
-        """ If the encoder is bidirectional, do the following transformation.
-            Ref: https://github.com/IBM/pytorch-seq2seq/blob/master/seq2seq/models/DecoderRNN.py#L176
-            -----------------------------------------------------------
-            In: (num_layers * num_directions, batch_size, hidden_size)
-            (ex: num_layers=2, num_directions=2)
+        """拼接双向 RNN 的隐藏状态。
 
-            layer 1: forward__hidden(1)
-            layer 1: backward_hidden(1)
-            layer 2: forward__hidden(2)
-            layer 2: backward_hidden(2)
+        将双向 RNN 的 forward 和 backward 隐藏状态沿特征维度拼接。
+        参考：https://github.com/IBM/pytorch-seq2seq/blob/master/seq2seq/models/DecoderRNN.py#L176
 
-            -----------------------------------------------------------
-            Out: (num_layers, batch_size, hidden_size * num_directions)
+        Args:
+            hidden: 输入隐藏状态，形状为 (num_layers * num_directions, batch_size, hidden_size)
 
-            layer 1: forward__hidden(1) backward_hidden(1)
-            layer 2: forward__hidden(2) backward_hidden(2)
+        Returns:
+            Tensor 或 tuple: 拼接后的隐藏状态，形状为 (num_layers, batch_size, hidden_size * num_directions)
         """
 
         def _cat(h):

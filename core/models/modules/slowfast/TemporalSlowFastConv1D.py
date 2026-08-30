@@ -7,8 +7,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.keys import Keys, require
 
+"""Temporal SlowFast 1D Convolution module.
+
+Implements the temporal modeling component for the SlowFast architecture,
+using 1D convolutions to fuse fast and slow pathways and model temporal
+dependencies in sign language video sequences.
+"""
+
 
 class TemporalSlowFastConv1D( nn.Module ) :
+    """Temporal SlowFast 1D Convolution wrapper.
+
+    Wraps the TemporalSlowFastFuse module and applies three separate
+    linear classifiers to the fused temporal features.
+
+    Args:
+        args: Configuration dictionary with hidden_size, conv_type, use_bn, num_classes.
+    """
+
     def __init__ ( self , args ) :
         super ( TemporalSlowFastConv1D , self ).__init__ ( )
         hidden_size = args.get("hidden_size", None)
@@ -18,6 +34,15 @@ class TemporalSlowFastConv1D( nn.Module ) :
         self.fc = nn.ModuleList([nn.Linear(hidden_size, args["num_classes"]) for i in range(3)])
 
     def forward(self, data):
+
+        """Forward pass of TemporalSlowFastConv1D.
+
+        Args:
+            data: Dict containing Keys.FRAMEWISE_FEATURES and Keys.VID_LGT.
+
+        Returns:
+            dict: Dict containing Keys.VISUAL_FEAT, Keys.FEAT_LEN, and Keys.CONV_LOGITS.
+        """
 
         require(data, Keys.FRAMEWISE_FEATURES, Keys.VID_LGT, who="TemporalSlowFastConv1D")
         conv1d_outputs = self.conv1d(data[Keys.FRAMEWISE_FEATURES], data[Keys.VID_LGT])
@@ -29,6 +54,21 @@ class TemporalSlowFastConv1D( nn.Module ) :
         }
 
 class TemporalSlowFastFuse(nn.Module):
+    """Temporal SlowFast feature fusion module.
+
+    Applies separate 1D convolutions to the fast pathway, slow pathway,
+    and fused (main) pathway features for temporal modeling, supporting
+    multiple convolution configurations.
+
+    Args:
+        fast_input_size: Input feature dimension for the fast pathway.
+        slow_input_size: Input feature dimension for the slow pathway.
+        hidden_size: Hidden feature dimension.
+        conv_type: Convolution type determining kernel configurations (0-10).
+        use_bn: Whether to use batch normalization.
+        num_classes: Number of output classes, -1 for no classifier.
+    """
+
     def __init__(self, fast_input_size, slow_input_size, hidden_size, conv_type=2, use_bn=False, num_classes=-1):
         super(TemporalSlowFastFuse, self).__init__()
         self.use_bn = use_bn
@@ -97,6 +137,14 @@ class TemporalSlowFastFuse(nn.Module):
             self.fc = nn.ModuleList([nn.Linear(self.hidden_size, self.num_classes) for i in range(3)])
 
     def update_lgt(self, lgt):
+        """Update sequence lengths after convolution and pooling operations.
+
+        Args:
+            lgt: Original sequence lengths.
+
+        Returns:
+            Tensor: Updated sequence lengths.
+        """
         feat_len = copy.deepcopy(lgt)
         for ks in self.kernel_size:
             if ks[0] == 'P':
@@ -107,6 +155,20 @@ class TemporalSlowFastFuse(nn.Module):
         return feat_len
 
     def forward(self, frame_feat, lgt):
+        """Forward pass of TemporalSlowFastFuse.
+
+        Processes the fused frame features through separate temporal
+        convolutions for the main pathway, slow pathway, and fast pathway.
+        During training, all three pathways are computed; during evaluation,
+        only the main pathway is used.
+
+        Args:
+            frame_feat: Frame-level features of shape (N, C, T).
+            lgt: Sequence lengths for each sample.
+
+        Returns:
+            dict: Dict containing VISUAL_FEAT, CONV_LOGITS, and FEAT_LEN.
+        """
         visual_feat = [self.main_temporal_conv(frame_feat)]
         if self.training:
             slow_path = frame_feat[:, :self.slow_input_size]

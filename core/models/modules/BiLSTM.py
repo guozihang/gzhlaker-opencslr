@@ -1,13 +1,31 @@
-import pdb
+"""BiLSTM temporal modeling module for sequence feature extraction.
+
+Provides a configurable Bidirectional LSTM layer for modeling temporal
+dependencies in sign language sequence features.
+"""
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from models.keys import Keys
 
 
 class BiLSTMLayer(nn.Module):
-    def __init__(self, input_size, debug=False, hidden_size=512, num_layers=1, dropout=0.3,
-                 bidirectional=True, rnn_type='LSTM', num_classes=-1):
+    """Bidirectional LSTM layer for temporal modeling.
+
+    Processes sequence features through a bidirectional LSTM (or GRU),
+    handling variable-length sequences with packed padding.
+
+    Args:
+        input_size: Dimensionality of input features.
+        hidden_size: Total hidden size (will be split if bidirectional).
+        num_layers: Number of recurrent layers.
+        dropout: Dropout rate between layers.
+        bidirectional: Whether to use bidirectional RNN.
+        rnn_type: Type of RNN cell ('LSTM' or 'GRU').
+    """
+
+    def __init__(self, input_size, hidden_size=512, num_layers=1, dropout=0.3,
+                 bidirectional=True, rnn_type='LSTM'):
         super(BiLSTMLayer, self).__init__()
 
         self.dropout = dropout
@@ -17,25 +35,25 @@ class BiLSTMLayer(nn.Module):
         self.num_directions = 2 if bidirectional else 1
         self.hidden_size = int(hidden_size / self.num_directions)
         self.rnn_type = rnn_type
-        self.debug = debug
         self.rnn = getattr(nn, self.rnn_type)(
             input_size=self.input_size,
             hidden_size=self.hidden_size,
             num_layers=self.num_layers,
             dropout=self.dropout,
             bidirectional=self.bidirectional)
-        # for name, param in self.rnn.named_parameters():
-        #     if name[:6] == 'weight':
-        #         nn.init.orthogonal_(param)
 
     def forward(self, src_feats, src_lens, hidden=None):
-        """
+        """Forward pass through the BiLSTM layer.
+
         Args:
-            - src_feats: (max_src_len, batch_size, D)
-            - src_lens: (batch_size)
+            src_feats: Input features, shape (max_src_len, batch_size, D).
+            src_lens: Actual lengths of each sequence, shape (batch_size,).
+            hidden: Optional initial hidden state.
+
         Returns:
-            - outputs: (max_src_len, batch_size, hidden_size * num_directions)
-            - hidden : (num_layers, batch_size, hidden_size * num_directions)
+            dict: Contains:
+                - Keys.PREDICTIONS: Output features, shape (max_src_len, batch_size, hidden_size * num_directions)
+                - Keys.HIDDEN: Hidden state, shape (num_layers, batch_size, hidden_size * num_directions)
         """
         # (max_src_len, batch_size, D)
         packed_emb = nn.utils.rnn.pack_padded_sequence(src_feats, src_lens)
@@ -66,22 +84,19 @@ class BiLSTMLayer(nn.Module):
         }
 
     def _cat_directions(self, hidden):
-        """ If the encoder is bidirectional, do the following transformation.
-            Ref: https://github.com/IBM/pytorch-seq2seq/blob/master/seq2seq/models/DecoderRNN.py#L176
-            -----------------------------------------------------------
-            In: (num_layers * num_directions, batch_size, hidden_size)
-            (ex: num_layers=2, num_directions=2)
+        """Concatenate forward and backward hidden states.
 
-            layer 1: forward__hidden(1)
-            layer 1: backward_hidden(1)
-            layer 2: forward__hidden(2)
-            layer 2: backward_hidden(2)
+        If the encoder is bidirectional, transform the hidden states
+        from (num_layers * num_directions, batch_size, hidden_size) to
+        (num_layers, batch_size, hidden_size * num_directions).
 
-            -----------------------------------------------------------
-            Out: (num_layers, batch_size, hidden_size * num_directions)
+        Ref: https://github.com/IBM/pytorch-seq2seq/blob/master/seq2seq/models/DecoderRNN.py#L176
 
-            layer 1: forward__hidden(1) backward_hidden(1)
-            layer 2: forward__hidden(2) backward_hidden(2)
+        Args:
+            hidden: Hidden state tensor or tuple of tensors (for LSTM).
+
+        Returns:
+            Concatenated hidden state with directions merged.
         """
 
         def _cat(h):

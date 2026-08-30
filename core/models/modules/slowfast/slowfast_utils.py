@@ -8,7 +8,26 @@ from itertools import groupby
 import torch.nn.functional as F
 
 
+"""SlowFast 工具模块，提供 CTC 解码功能。
+
+包含支持集束搜索（beam search）和贪婪搜索（max decoding）的解码器实现，
+将神经网络输出的序列 logits 解码为手语词汇序列。
+"""
+
+
 class Decode(object):
+    """CTC 解码器基类。
+
+    支持贪婪搜索（max decoding）和集束搜索（beam search）两种解码模式，
+    将神经网络输出解码为词汇序列。
+
+    Args:
+        gloss_dict: 词汇表字典，映射 gloss ID 到词汇
+        num_classes: 分类数（词汇表大小）
+        search_mode: 解码模式，'max' 表示贪婪搜索，'beam' 表示集束搜索
+        blank_id: CTC 空白标签的 ID
+    """
+
     def __init__(self, gloss_dict, num_classes, search_mode, blank_id=0):
         self.i2g_dict = dict((v[0], k) for k, v in gloss_dict.items())
         self.g2i_dict = {v: k for k, v in self.i2g_dict.items()}
@@ -20,6 +39,17 @@ class Decode(object):
                                                     num_processes=10)
 
     def decode(self, nn_output, vid_lgt, batch_first=True, probs=False):
+        """执行解码。
+
+        Args:
+            nn_output: 神经网络输出 logits，形状为 (T, B, C) 或 (B, T, C)
+            vid_lgt: 每个样本的序列长度
+            batch_first: 输入是否以 batch 为第一维
+            probs: 输入是否已经是概率值（无需 softmax）
+
+        Returns:
+            list: 解码后的词汇序列列表
+        """
         if not batch_first:
             nn_output = nn_output.permute(1, 0, 2)
         if self.search_mode == "max":
@@ -28,6 +58,18 @@ class Decode(object):
             return self.BeamSearch(nn_output, vid_lgt, probs)
 
     def BeamSearch(self, nn_output, vid_lgt, probs=False):
+        """集束搜索解码。
+
+        使用 CTCBeamDecoder 执行集束搜索解码，并去除连续重复的标签。
+
+        Args:
+            nn_output: 神经网络输出，形状为 (B, T, N)
+            vid_lgt: 每个样本的序列长度
+            probs: 输入是否已经是概率值
+
+        Returns:
+            list: 解码后的词汇序列列表
+        """
         '''
         CTCBeamDecoder Shape:
                 - Input:  nn_output (B, T, N), which should be passed through a softmax layer
@@ -50,6 +92,17 @@ class Decode(object):
         return ret_list
 
     def MaxDecode(self, nn_output, vid_lgt):
+        """贪婪搜索解码。
+
+        取每个时间步概率最大的标签，去除连续重复和空白标签。
+
+        Args:
+            nn_output: 神经网络输出，形状为 (B, T, N)
+            vid_lgt: 每个样本的序列长度
+
+        Returns:
+            list: 解码后的词汇序列列表
+        """
         index_list = torch.argmax(nn_output, axis=2)
         batchsize, lgt = index_list.shape
         ret_list = []

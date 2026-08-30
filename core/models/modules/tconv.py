@@ -1,3 +1,9 @@
+"""时序卷积模块，用于 CSLR 模型中的时序特征建模。
+
+提供 Temporal_LiftPool、TemporalConv 和 VACTemporalConv 等时序处理模块，
+支持标准卷积和提升池化（LiftPool）操作。
+"""
+
 import copy
 import pdb
 import torch
@@ -6,22 +12,33 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.keys import Keys
 
+
 class Temporal_LiftPool(nn.Module):
+    """时序提升池化（LiftPool）模块。
+
+    基于提升方案（Lifting Scheme）的时序池化操作，通过预测器（Predictor）
+    和更新器（Updater）自适应地分解和池化时序特征。
+
+    Args:
+        input_size: 输入特征通道数。
+        kernel_size: 池化核大小（间隔），默认为2。
+    """
+
     def __init__(self, input_size, kernel_size=2):
         super(Temporal_LiftPool, self).__init__()
         self.kernel_size = kernel_size
         self.predictor = nn.Sequential(
-            nn.Conv1d(input_size, input_size, kernel_size=3, stride=1, padding=1, groups=input_size), 
-            nn.ReLU(inplace=True),   
+            nn.Conv1d(input_size, input_size, kernel_size=3, stride=1, padding=1, groups=input_size),
+            nn.ReLU(inplace=True),
             nn.Conv1d(input_size, input_size, kernel_size=1, stride=1, padding=0),
-            nn.Tanh(),    
+            nn.Tanh(),
                                     )
 
         self.updater = nn.Sequential(
             nn.Conv1d(input_size, input_size, kernel_size=3, stride=1, padding=1, groups=input_size),
-            nn.ReLU(inplace=True),   
+            nn.ReLU(inplace=True),
             nn.Conv1d(input_size, input_size, kernel_size=1, stride=1, padding=0),
-            nn.Tanh(),    
+            nn.Tanh(),
                                     )
         self.predictor[2].weight.data.fill_(0.0)
         self.updater[2].weight.data.fill_(0.0)
@@ -29,6 +46,16 @@ class Temporal_LiftPool(nn.Module):
         self.weight2 = Local_Weighting(input_size)
 
     def forward(self, x):
+        """前向传播。
+
+        将输入特征分解为偶数和奇数子序列，通过预测-更新机制实现提升池化。
+
+        Args:
+            x: 输入特征，形状 (B, C, T)
+
+        Returns:
+            tuple: (池化后的特征, 更新损失 u_loss, 预测损失 p_loss)
+        """
         B, C, T= x.size()
         Xe = x[:,:,:T:self.kernel_size]
         Xo = x[:,:,1:T:self.kernel_size]
@@ -39,7 +66,17 @@ class Temporal_LiftPool(nn.Module):
         s = torch.cat((x[:,:,:0:self.kernel_size], s, x[:,:,T::self.kernel_size]),2)
         return self.weight1(s)+self.weight2(d), loss_u, loss_p
 
+
 class Local_Weighting(nn.Module):
+    """局部加权模块。
+
+    通过卷积和实例归一化对特征进行局部自适应加权，
+    输出为原始特征与加权调整值的组合。
+
+    Args:
+        input_size: 输入特征通道数。
+    """
+
     def __init__(self, input_size ):
         super(Local_Weighting, self).__init__()
         self.conv = nn.Conv1d(input_size, input_size, kernel_size=5, stride=1, padding=2)
@@ -47,10 +84,33 @@ class Local_Weighting(nn.Module):
         self.conv.weight.data.fill_(0.0)
 
     def forward(self, x):
+        """前向传播。
+
+        Args:
+            x: 输入特征，形状 (B, C, T)
+
+        Returns:
+            torch.Tensor: 加权后的特征，形状与输入相同
+        """
         out = self.conv(x)
         return x + x*(F.sigmoid(self.insnorm(out))-0.5)
 
+
 class TemporalConv(nn.Module):
+    """标准时序卷积模块，支持 LiftPool 和 Conv1D 混合架构。
+
+    根据 kernel_size 配置构建多层时序处理网络，每层可以是
+    标准卷积（'K'）或提升池化（'P'），可选最后的全连接分类头。
+
+    Args:
+        input_size: 输入特征维度。
+        hidden_size: 隐藏层特征维度。
+        kernel_size: 每层的配置列表，如 ['K3', 'P2', 'K5']。
+        stride: 步长列表（当前仅保留接口兼容）。
+        use_bn: 是否使用批归一化（当前未使用）。
+        num_classes: 分类数，-1 表示不添加分类头。
+    """
+
     def __init__(self, input_size, hidden_size, kernel_size=['K3'], stride=[0], use_bn=False, num_classes=-1):
         super(TemporalConv, self).__init__()
         self.use_bn = use_bn
@@ -96,6 +156,18 @@ class TemporalConv(nn.Module):
             self.fc = nn.Linear(self.hidden_size, self.num_classes)
 
     def update_lgt(self, feat_len):
+        """根据卷积和池化操作更新特征长度。
+
+        遍历 kernel_size 配置，对每层操作计算输出长度：
+        'P'（池化）: 长度除以核大小
+        'K'（卷积）: 长度减去 (kernel_size - 1)
+
+        Args:
+            feat_len: 原始特征长度
+
+        Returns:
+            torch.Tensor: 更新后的特征长度
+        """
         for ks in self.kernel_size:
             if ks[0] == 'P':
                 feat_len //= int(ks[1])
@@ -104,7 +176,18 @@ class TemporalConv(nn.Module):
         return feat_len
 
     def forward(self, frame_feat, lgt):
-        visual_feat = frame_feat
+        """前向传播。
+
+        依次通过时序卷积层处理帧级特征，累积 LiftPool 损失，
+        更新特征长度，并可选输出分类 logits。
+
+        Args:
+            frame_feat: 帧级特征，形状 (B, C, T)
+            lgt: 每个样本的实际长度
+
+        Returns:
+            dict: 包含视觉特征、卷积 logits、特征长度和 LiftPool 损失
+        """
         loss_LiftPool_u = 0
         loss_LiftPool_p = 0
         i = 0
@@ -128,6 +211,20 @@ class TemporalConv(nn.Module):
         }
 
 class VACTemporalConv(nn.Module):
+    """VAC 模型的时序卷积模块。
+
+    与 TemporalConv 类似，但使用标准 MaxPool1d 替代 LiftPool，
+    适用于 VAC（Visual Alignment Constraint）模型架构。
+
+    Args:
+        input_size: 输入特征维度。
+        hidden_size: 隐藏层特征维度。
+        kernel_size: 每层的配置列表，如 ['K3', 'P2', 'K5']。
+        stride: 步长列表（当前仅保留接口兼容）。
+        use_bn: 是否使用批归一化（当前未使用）。
+        num_classes: 分类数，-1 表示不添加分类头。
+    """
+
     def __init__(self, input_size, hidden_size, kernel_size=['K3'], stride=[0], use_bn=False, num_classes=-1):
         super(VACTemporalConv, self).__init__()
         self.use_bn = use_bn
@@ -154,6 +251,14 @@ class VACTemporalConv(nn.Module):
             self.fc = nn.Linear(self.hidden_size, self.num_classes)
 
     def update_lgt(self, lgt):
+        """根据卷积和池化操作更新特征长度。
+
+        Args:
+            lgt: 原始特征长度
+
+        Returns:
+            torch.Tensor: 更新后的特征长度
+        """
         feat_len = copy.deepcopy(lgt)
         for ks in self.kernel_size:
             if ks[0] == 'P':
@@ -163,7 +268,18 @@ class VACTemporalConv(nn.Module):
         return feat_len
 
     def forward(self, frame_feat, lgt):
-        visual_feat = self.temporal_conv(frame_feat)
+        """前向传播。
+
+        依次通过时序卷积层处理帧级特征，更新特征长度，
+        并可选输出分类 logits。
+
+        Args:
+            frame_feat: 帧级特征，形状 (B, C, T)
+            lgt: 每个样本的实际长度
+
+        Returns:
+            dict: 包含视觉特征、卷积 logits 和特征长度
+        """
         lgt = self.update_lgt(lgt)
         logits = None if self.num_classes == -1 \
             else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)

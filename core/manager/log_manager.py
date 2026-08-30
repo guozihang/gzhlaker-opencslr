@@ -1,4 +1,10 @@
 # -*- encoding: utf-8 -*-
+"""Logging and visualization manager module for OpenCSLR.
+
+Provides a rich-based console output, loguru file logging, and Weights & Biases
+integration for experiment tracking and visualization.
+"""
+
 import datetime
 import os
 from pathlib import Path
@@ -91,6 +97,11 @@ class LogManager :
 
     @classmethod
     def info_manager ( cls ) -> None :
+        """Log the current experiment argument configuration as a panel.
+
+        Displays all parsed arguments in a formatted panel for debugging
+        and experiment tracking purposes.
+        """
         LogManager.info_panel ( vars( ArgumentManager.get ( ) ) , "Argument" )
         # LogManager.info_panel ( ConfigManager.get ( ) , "Config" )
 

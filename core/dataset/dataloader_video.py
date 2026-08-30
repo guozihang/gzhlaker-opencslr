@@ -1,3 +1,9 @@
+"""Video dataset loader for CSLR.
+
+Supports multiple data types: video (raw jpg), lmdb, memmap, and pre-extracted
+features. Returns video frames, label indices, and original file info for each
+sample.
+"""
 import os
 import cv2
 import sys
@@ -9,7 +15,31 @@ from libs import video_augmentation
 import pickle
 sys.path.append("..")
 
-class VideoDataset( data.Dataset ):
+
+class VideoDataset(data.Dataset):
+    """Video dataset for continuous sign language recognition.
+
+    Loads video frames and corresponding gloss labels from different storage
+    backends (video folders, LMDB, memmap, or pre-extracted features). Applies
+    data augmentation during training mode.
+
+    Args:
+        prefix: Root path prefix for the dataset.
+        gloss_dict: Dictionary mapping gloss strings to indices.
+        dataset: Dataset name (e.g., 'phoenix2014', 'phoenix2014-T', 'CSL-Daily').
+        drop_ratio: Ratio for dropping frames (unused).
+        num_gloss: Number of glosses in the dictionary.
+        mode: Dataset split, one of 'train', 'dev', 'test'.
+        transform_mode: Whether to apply training transforms.
+        datatype: Data storage type ('video', 'lmdb', 'memmap', or other for features).
+        frame_interval: Frame sampling interval.
+        image_scale: Scale factor for image resize.
+        allowable_vid_length: Minimum allowable video length.
+        skip_fileids: File IDs to skip (string, list, or dict per mode).
+        skip_indices: Sample indices to skip (string, list, or dict per mode).
+        skip_info_path: Path to a file listing file IDs to skip.
+    """
+
     def __init__(self, prefix, gloss_dict, dataset='phoenix2014', drop_ratio=1, num_gloss=-1, mode="train", transform_mode=True,
                  datatype="lmdb", frame_interval=1, image_scale=1.0, allowable_vid_length=16,
                  skip_fileids=None, skip_indices=None, skip_info_path=None):
@@ -35,12 +65,29 @@ class VideoDataset( data.Dataset ):
 
     @staticmethod
     def select_mode_value(value, mode):
+        """Select value based on mode if value is a dict.
+
+        Args:
+            value: Raw value, possibly a dict with mode keys.
+            mode: Current mode string ('train', 'dev', 'test').
+
+        Returns:
+            The value for the given mode, the 'all' key, or the raw value.
+        """
         if isinstance(value, dict):
             return value.get(mode, value.get("all"))
         return value
 
     @staticmethod
     def parse_list(value):
+        """Parse a value into a list of strings.
+
+        Args:
+            value: None, a list/tuple/set, or a string with comma or newline separators.
+
+        Returns:
+            A list of strings.
+        """
         if value is None:
             return []
         if isinstance(value, (list, tuple, set)):
@@ -52,6 +99,14 @@ class VideoDataset( data.Dataset ):
 
     @staticmethod
     def normalize_fileid(value):
+        """Normalize a file ID string by stripping path and extension.
+
+        Args:
+            value: Raw file ID string (may contain path or '.npy' suffix).
+
+        Returns:
+            Normalized file ID (basename without extension).
+        """
         value = str(value).strip()
         value = value.split("|")[0]
         value = os.path.basename(value)
@@ -61,6 +116,15 @@ class VideoDataset( data.Dataset ):
 
     @staticmethod
     def is_sample_item(index, item):
+        """Check if an item is a valid sample entry.
+
+        Args:
+            index: Sample index.
+            item: Data item to check.
+
+        Returns:
+            True if the index is numeric and the item is a dict with 'fileid'.
+        """
         try:
             int(index)
         except (TypeError, ValueError):
@@ -69,6 +133,18 @@ class VideoDataset( data.Dataset ):
 
     @classmethod
     def load_inputs_list(cls, dataset, mode, skip_fileids=None, skip_indices=None, skip_info_path=None):
+        """Load and filter the list of input samples.
+
+        Args:
+            dataset: Dataset name.
+            mode: Dataset split ('train', 'dev', 'test').
+            skip_fileids: File IDs to skip.
+            skip_indices: Sample indices to skip.
+            skip_info_path: Path to a file with file IDs to skip.
+
+        Returns:
+            Tuple of (filtered_inputs_list, filtered_indices_list).
+        """
         raw_inputs = np.load(f"./preprocess/{dataset}/{mode}_info.npy", allow_pickle=True).item()
         if isinstance(raw_inputs, dict):
             indexed_inputs = sorted(
@@ -105,6 +181,17 @@ class VideoDataset( data.Dataset ):
         return kept_inputs, kept_indices
 
     def __getitem__(self, idx):
+        """Get a sample by index.
+
+        Dispatches to the appropriate reader based on data_type and applies
+        normalization / augmentation.
+
+        Args:
+            idx: Sample index.
+
+        Returns:
+            Tuple of (video_tensor, label_tensor, original_info_string).
+        """
         if self.data_type == "video":
             input_data, label, _ = self.read_video(idx)
             input_data, label = self.normalize(input_data, label)
@@ -124,7 +211,12 @@ class VideoDataset( data.Dataset ):
             input_data, label = self.read_features(idx)
             return input_data, label, self.inputs_list[idx]['original_info']
 
-    def init_memmap ( self ) :
+    def init_memmap(self):
+        """Initialize memory-mapped numpy arrays for video data.
+
+        Loads pre-computed pickle info files and opens the corresponding
+        memmap files for the current dataset and mode.
+        """
         if self.dataset == 'phoenix2014' or self.dataset == 'phoenix2014-normal':
             with open ( f"/sda/data/guozihang/sign_dataset/ph_bigarray/phoenix2014-{self.mode}.pickle" , mode = "rb" ) as f :
                 self.info = pickle.load ( f )
@@ -155,7 +247,15 @@ class VideoDataset( data.Dataset ):
                 mode = "r" ,
                 shape = (T , 256 , 256 , 3) )
 
-    def read_memmap ( self , index ) :
+    def read_memmap(self, index):
+        """Read a sample from a memory-mapped array.
+
+        Args:
+            index: Sample index.
+
+        Returns:
+            Tuple of (image_list, label_list, file_info_dict).
+        """
         fi = self.inputs_list [ index ]
         label_list = [ ]
         for phase in fi [ 'label' ].split ( " " ) :
@@ -169,7 +269,14 @@ class VideoDataset( data.Dataset ):
         return images , label_list , fi
 
     def read_video(self, index):
-        # load file info
+        """Read a sample from on-disk JPEG image folders.
+
+        Args:
+            index: Sample index.
+
+        Returns:
+            Tuple of (image_list, label_list, file_info_dict).
+        """
         fi = self.inputs_list[index]
         img_folder = os.path.join(self.prefix, "features/fullFrame-256x256px/" + fi['folder']) if 'phoenix' in self.dataset else os.path.join(self.prefix, "features/fullFrame-256x256px/" + fi['folder'] + "/*.jpg")
         img_list = sorted(glob.glob(img_folder))
@@ -184,17 +291,39 @@ class VideoDataset( data.Dataset ):
         return [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in img_list], label_list, fi
 
     def read_features(self, index):
-        # load file info
+        """Read a sample from pre-extracted feature files.
+
+        Args:
+            index: Sample index.
+
+        Returns:
+            Tuple of (features, labels).
+        """
         fi = self.inputs_list[index]
         data = np.load(f"./features/{self.mode}/{fi['fileid']}_features.npy", allow_pickle=True).item()
         return data['features'], data['label']
 
     def normalize(self, video, label, file_id=None):
+        """Apply data augmentation and normalize pixel values to [-1, 1].
+
+        Args:
+            video: Input video frames.
+            label: Gloss label indices.
+            file_id: Optional file identifier for WERAugment.
+
+        Returns:
+            Tuple of (normalized_video_tensor, label).
+        """
         video, label = self.data_aug(video, label, file_id)
         video = video.float() / 127.5 - 1
         return video, label
 
     def transform(self):
+        """Build the data augmentation pipeline.
+
+        Returns:
+            A Compose object with the appropriate transforms for train or test mode.
+        """
         if self.transform_mode == "train":
             print("Apply training transform.")
             return video_augmentation.Compose([
@@ -213,5 +342,10 @@ class VideoDataset( data.Dataset ):
             ])
 
     def __len__(self):
+        """Return the total number of samples.
+
+        Returns:
+            Number of samples in the dataset.
+        """
         #return 100
         return len(self.inputs_list)

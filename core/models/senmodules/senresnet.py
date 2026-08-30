@@ -1,3 +1,8 @@
+"""SEN-based ResNet backbone for sign language recognition.
+
+Implements a ResNet-18 variant enhanced with Temporal-Spatial Enhancement Module (TSEM)
+and Spatial Enhancement Module (SSEM) for video-based feature extraction.
+"""
 import torch
 from torch import nn
 import torch
@@ -13,6 +18,16 @@ model_urls={
     'resnet18':'mymodels/resnet18-f37072fd.pth'
 }
 def conv3x3(in_planes,out_planes,stride=1):
+    """Create a 3x3 3D convolution layer.
+
+    Args:
+        in_planes: Number of input channels.
+        out_planes: Number of output channels.
+        stride: Convolution stride along spatial dimensions.
+
+    Returns:
+        nn.Conv3d: A 3D convolutional layer with kernel size (1,3,3).
+    """
     return nn.Conv3d(
         in_channels=in_planes,
         out_channels=out_planes,
@@ -23,6 +38,12 @@ def conv3x3(in_planes,out_planes,stride=1):
     )
 
 class TSEM(nn.Module):
+    """Temporal-Spatial Enhancement Module (TSEM).
+
+    Enhances temporal features using multi-scale dilated convolutions
+    with learnable weights and a gating mechanism.
+    """
+
     def __init__(self,input_size):
         super(TSEM,self).__init__()
         hidden_size=input_size//16
@@ -36,6 +57,14 @@ class TSEM(nn.Module):
         self.alpha=nn.Parameter(torch.zeros(1),requires_grad=True)
         self.relu=nn.ReLU(inplace=True)
     def forward(self,x):
+        """Forward pass of TSEM.
+
+        Args:
+            x: Input tensor of shape (N, C, T, H, W).
+
+        Returns:
+            Tensor: Enhanced feature map with the same shape as input.
+        """
         out=self.conv_transform(x.mean(-1).mean(-1))
         aggregate_out=0
         for i in range(self.num):
@@ -44,6 +73,12 @@ class TSEM(nn.Module):
         return x*(torch.sigmoid(out.unsqueeze(-1).unsqueeze(-1))-0.5)*self.alpha
 
 class SSEM(nn.Module):
+    """Spatial Enhancement Module (SSEM).
+
+    Enhances spatial features using multi-scale 3D dilated convolutions
+    with learnable weights and a gating mechanism.
+    """
+
     def __init__(self,input_size):
         super(SSEM,self).__init__()
         div_channel=input_size//16
@@ -56,6 +91,14 @@ class SSEM(nn.Module):
         self.conv_back=nn.Conv3d(div_channel,input_size,kernel_size=(1,1,1))
         self.alpha=nn.Parameter(torch.ones(1),requires_grad=True)
     def forward(self,x):
+        """Forward pass of SSEM.
+
+        Args:
+            x: Input tensor of shape (N, C, T, H, W).
+
+        Returns:
+            Tensor: Enhanced feature map with the same shape as input.
+        """
         out=self.conv_transform(x)
         aggregate_out=0
         for i in range(self.num):
@@ -64,6 +107,14 @@ class SSEM(nn.Module):
         return x*(torch.sigmoid(out)-0.5)*self.alpha
 
 class BasicBlock(nn.Module):
+    """Basic residual block with TSEM and SSEM enhancements.
+
+    A 3D residual block that incorporates temporal-spatial and spatial
+    enhancement modules before the second convolution.
+
+    Attributes:
+        expansion: Expansion factor for output channels.
+    """
     expansion=1
     def __init__(self,inplanes,planes,stride=1,downsample=None):
         super(BasicBlock,self).__init__()
@@ -76,6 +127,14 @@ class BasicBlock(nn.Module):
         self.tsem=TSEM(planes)
         self.ssem=SSEM(planes)
     def forward(self,x):
+        """Forward pass of BasicBlock.
+
+        Args:
+            x: Input tensor of shape (N, C, T, H, W).
+
+        Returns:
+            Tensor: Output tensor after residual connection and activation.
+        """
         residual=x
         #print('x.shape:',x.shape)
         out=self.conv1(x)
@@ -90,6 +149,17 @@ class BasicBlock(nn.Module):
         out=self.relu(out)
         return out
 class ResNet(nn.Module):
+    """ResNet backbone with 3D convolutions for video processing.
+
+    Implements a standard ResNet architecture using 3D convolutions
+    for spatio-temporal feature extraction.
+
+    Args:
+        block: The residual block type (e.g., BasicBlock).
+        layers: Number of blocks in each layer.
+        num_classes: Number of output classes for classification.
+    """
+
     def __init__(self,block,layers,num_classes=1000):
         self.inplanes=64
         super(ResNet,self).__init__()
@@ -110,6 +180,17 @@ class ResNet(nn.Module):
                 nn.init.constant_(m.weight,1)
                 nn.init.constant_(m.bias,0)
     def _make_layer(self,block,planes,blocks,stride=1):
+        """Create a sequential layer of residual blocks.
+
+        Args:
+            block: The residual block type.
+            planes: Number of output channels for the layer.
+            blocks: Number of blocks in the layer.
+            stride: Convolution stride for the first block.
+
+        Returns:
+            nn.Sequential: A sequential container of blocks.
+        """
         downsample=None
         if stride!=1 or self.inplanes!=planes*block.expansion:
             downsample=nn.Sequential(
@@ -123,6 +204,14 @@ class ResNet(nn.Module):
             layers.append(block(self.inplanes,planes))
         return nn.Sequential(*layers)
     def forward(self,x):
+        """Forward pass of ResNet.
+
+        Args:
+            x: Input tensor of shape (N, C, T, H, W).
+
+        Returns:
+            Tensor: Output feature vector after global pooling and FC.
+        """
         #print(x.shape)
         #N,C,T,H,W=x.size()
         x=self.conv1(x)
@@ -152,11 +241,30 @@ def resnet18(**kwargs):
     return model
 
 class SENresnet(nn.Module):
+    """SEN-ResNet wrapper for sign language recognition.
+
+    Wraps a ResNet-18 backbone and processes video frames to extract
+    frame-wise visual features. Handles both 5D video tensors and
+    pre-extracted features.
+
+    Args:
+        args: Configuration dictionary containing model parameters.
+    """
+
     def __init__(self,args):
         super(SENresnet,self).__init__()
         self.conv2d=resnet18()
         self.conv2d.fc=Identity()
     def masked_bn ( self , inputs , len_x ) :
+        """Apply masked batch normalization with variable-length inputs.
+
+        Args:
+            inputs: Input tensor.
+            len_x: List of lengths for each sample in the batch.
+
+        Returns:
+            Tensor: Output after batch normalization, padded to uniform length.
+        """
         def pad ( tensor , length ) :
             return torch.cat (
                 [ tensor , tensor.new ( length - tensor.size ( 0 ) , *tensor.size ( ) [ 1 : ] ).zero_ ( ) ] )
@@ -167,6 +275,18 @@ class SENresnet(nn.Module):
                           for idx , lgt in enumerate ( len_x ) ] )
         return x
     def forward(self,data):
+        """Forward pass of SEN-ResNet.
+
+        Extracts frame-wise features from video input. Supports both
+        raw video tensors (5D) and pre-extracted features.
+
+        Args:
+            data: Dict containing Keys.VID with video tensor
+                  of shape (N, C, T, H, W) or (N, T, D).
+
+        Returns:
+            dict: Dict containing Keys.FRAMEWISE_FEATURES.
+        """
         require(data, Keys.VID, who="SENresnet")
         x=data[Keys.VID]
         if len(x.shape)==5:

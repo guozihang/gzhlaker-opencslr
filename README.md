@@ -156,6 +156,19 @@ Contributions are welcome! Please follow these steps:
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+## Documentation（文档）
+
+文档位于 `docs/` 目录,基于 Sphinx 构建。API 参考(`docs/source/api/`)由
+`docs/tools/gen_api_docs.py` **从源码注释与函数签名自动生成**,无需手写,改完源码注释后一条命令重新生成:
+
+```bash
+cd docs
+make gen-api   # 重新生成 docs/source/api/ 与 api.rst(幂等,可重复执行)
+make html      # 构建 HTML 文档,输出在 docs/build/html/
+```
+
+手写页面(Quickstart、installation、OpenSLR 系列)不受 `make gen-api` 影响,正常维护即可。
+
 ## Resources
 
 - **[Awesome Continuous Sign Language Recognition](https://github.com/guozihang/awesome-continuous-sign-language-recognition)**: A comprehensive collection of papers, datasets, and resources for continuous sign language recognition research

@@ -68,8 +68,13 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-# docs/_build/
+# Sphinx documentation (built HTML, doctrees, and auto-generated API .rst)
+docs/build/
+docs/source/api/
+docs/source/api.rst
+# Keep only custom images under _static, ignore theme-provided static files
+docs/source/_static/*
+!docs/source/_static/images/
 
 # PyBuilder
 .pybuilder/

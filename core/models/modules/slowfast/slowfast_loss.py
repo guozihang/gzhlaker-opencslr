@@ -3,7 +3,27 @@ import torch.nn as nn
 from ..criterions import SeqKD
 from models.keys import Keys, require
 
+"""SlowFast 模型的损失函数模块。
+
+计算慢路径、快路径和主路径的 CTC 损失，
+以及知识蒸馏损失，支持多任务学习的加权组合。
+"""
+
+
 class slowfast_loss(nn.Module):
+    """SlowFast 损失函数模块。
+
+    计算多路径（主路径、慢路径、快路径）的 CTC 损失以及知识蒸馏损失。
+    支持基于配置权重的多任务损失组合，包括：
+    - SeqCTC: 主路径序列 CTC 损失
+    - Slow: 慢路径 CTC 损失
+    - Fast: 快路径 CTC 损失
+    - ConvCTC: 卷积层输出 CTC 损失
+    - Dist: 知识蒸馏损失
+
+    Args:
+        loss_weights: 字典，包含各损失项的权重
+    """
 
     def __init__(self, loss_weights):
         super(slowfast_loss, self).__init__()
@@ -13,6 +33,14 @@ class slowfast_loss(nn.Module):
         self.loss['distillation'] = SeqKD(T=8)
 
     def forward(self, data):
+        """前向传播（计算损失）。
+
+        Args:
+            data: 包含 SEQUENCE_LOGITS, CONV_LOGITS, LABEL, FEAT_LEN, LABEL_LGT 的字典
+
+        Returns:
+            dict: 包含总损失和各项损失明细的字典
+        """
         require(data, Keys.SEQUENCE_LOGITS, Keys.CONV_LOGITS, Keys.LABEL, Keys.FEAT_LEN, Keys.LABEL_LGT,
                 who="slowfast_loss")
         loss = 0

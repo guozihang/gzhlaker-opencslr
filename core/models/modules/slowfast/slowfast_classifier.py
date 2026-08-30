@@ -5,18 +5,51 @@ import torch.nn.functional as F
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
 from models.keys import Keys, require
 
+"""SlowFast 分类器模块。
+
+为 SlowFast 模型的多路径输出提供线性分类器，
+支持权重归一化和分类器共享机制。
+"""
+
 
 class NormLinear(nn.Module):
+    """权重归一化的线性层。
+
+    使用 L2 归一化对权重矩阵进行归一化处理，
+    然后执行矩阵乘法，替代标准的线性变换。
+
+    Args:
+        in_dim: 输入特征维度
+        out_dim: 输出特征维度
+    """
+
     def __init__(self, in_dim, out_dim):
         super(NormLinear, self).__init__()
         self.weight = nn.Parameter(torch.Tensor(in_dim, out_dim))
         nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
 
     def forward(self, x):
+        """前向传播。
+
+        Args:
+            x: 输入张量，形状为 (..., in_dim)
+
+        Returns:
+            Tensor: 输出张量，形状为 (..., out_dim)
+        """
         outputs = torch.matmul(x, F.normalize(self.weight, dim=0))
         return outputs
 
 class slowfast_classifier(nn.Module):
+    """SlowFast 分类器模块。
+
+    为 SlowFast 的时序卷积输出提供三个路径（主路径、慢路径、快路径）
+    的线性分类器，支持权重归一化和分类器共享机制。
+
+    Args:
+        args: 配置字典，包含 weight_norm, share_classifier, num_classes 等参数
+    """
+
     def __init__(self, args):
         super(slowfast_classifier, self).__init__()
         weight_norm = args.get("weight_norm", None)
@@ -39,6 +72,16 @@ class slowfast_classifier(nn.Module):
             self.conv1d.fc = nn.ModuleList([classifier for i in range(3)])
 
     def forward(self, data):
+        """前向传播。
+
+        对时序模型的输出 predictions 应用分类器，得到每个路径的序列 logits。
+
+        Args:
+            data: 包含 Keys.PREDICTIONS 的字典
+
+        Returns:
+            dict: 包含 Keys.SEQUENCE_LOGITS 的字典
+        """
         require(data, Keys.PREDICTIONS, who="slowfast_classifier")
 
         predictions = data[Keys.PREDICTIONS]

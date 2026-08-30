@@ -1,4 +1,10 @@
 # -*- encoding: utf-8 -*-
+"""单阶段训练/评估流水线。
+
+提供训练(eq_train)和评估(eq_eval)的核心循环,以及辅助函数
+get_feeder_arg 和 write2file。
+"""
+
 import os
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -17,10 +23,37 @@ from manager.device_manager import DeviceManager
 from models.keys import Keys
 
 def get_feeder_arg(cfg, key, default=None):
+    """从配置的 feeder_args 中获取指定 key 的值。
+
+    Args:
+        cfg: 配置对象,应包含 feeder_args 属性或字典。
+        key: 要获取的键名。
+        default: 键不存在时返回的默认值,默认为 None。
+
+    Returns:
+        feeder_args 中 key 对应的值,若不存在则返回 default。
+    """
     feeder_args = getattr(cfg, "feeder_args", {}) or {}
     return feeder_args.get(key, default)
 
 def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weights=None):
+    """执行一个 epoch 的训练。
+
+    使用混合精度训练(AMP),遍历所有 batch 计算损失并反向传播,
+    每 200 个 batch 打印一次平均损失,epoch 结束后执行 scheduler.step()。
+
+    Args:
+        loader: 训练数据 DataLoader。
+        model: CSLR 模型。
+        optimizer: 优化器。
+        scheduler: 学习率调度器,在每个 epoch 后 step。
+        device: 设备(CPU/GPU),当前未直接使用(data 由 DeviceManager 移入设备)。
+        epoch_idx: 当前 epoch 索引,用于日志。
+        loss_weights: 可选,损失权重,传递给模型内部的损失模块。
+
+    Returns:
+        list[float]: 所有 batch 的 loss 值列表。
+    """
     model.train()
     loss_value = []
     total_loss_dict = {}    # dict of all types of loss
@@ -61,6 +94,24 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
     return loss_value
 
 def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
+    """执行一个 epoch 的评估。
+
+    遍历验证集或测试集,收集模型识别结果并写入假设文件,然后调用
+    `evaluate` 计算 WER(词错误率)。支持跳过帧数超限的 batch 和
+    处理 GPU 运行时错误(可选跳过)。
+
+    Args:
+        cfg: 配置对象,包含 dataset_info 等评估所需信息。
+        loader: 评估数据 DataLoader。
+        model: CSLR 模型。
+        device: 设备(CPU/GPU),当前未直接使用。
+        mode: 评估模式,通常为 "dev" 或 "test",用于日志和输出文件命名。
+        epoch: 当前 epoch 索引,用于日志和结果目录。
+        work_dir: 工作目录,用于保存输出假设文件和评估结果。
+
+    Returns:
+        float: WER(词错误率)百分比,如 25.43 表示 25.43%。
+    """
     model.eval()
     total_sent = []
     total_info = []
@@ -117,6 +168,16 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
     return float(ret.split("=")[1].split("%")[0])
 
 def write2file(path, info, output):
+    """将识别结果写入 CTM 格式的文件。
+
+    CTM 格式: `{文件名} 1 {起始时间:.2f} {结束时间:.2f} {词}`,
+    每个词均匀分配 0.01 秒的时长。
+
+    Args:
+        path: 输出文件路径。
+        info: 每个样本的文件名列表,与 output 一一对应。
+        output: 识别结果列表,每个元素为词元列表,每个词元形如 (词, 置信度)。
+    """
     filereader = open(path, "w")
     for sample_idx, sample in enumerate(output):
         for word_idx, word in enumerate(sample):

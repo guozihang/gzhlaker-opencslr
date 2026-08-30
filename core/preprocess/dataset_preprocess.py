@@ -27,6 +27,12 @@ from multiprocessing import Pool
 # ---------------------------------------------------------------------------
 
 def generate_gt_stm(info, save_path):
+    """Generate ground truth STM file for evaluation.
+
+    Args:
+        info: Dictionary of sample information.
+        save_path: Path to save the STM file.
+    """
     with open(save_path, "w") as f:
         for k, v in info.items():
             if not isinstance(k, int):
@@ -35,6 +41,15 @@ def generate_gt_stm(info, save_path):
 
 
 def sign_dict_update(total_dict, info):
+    """Update gloss frequency dictionary with labels from a sample info dict.
+
+    Args:
+        total_dict: Dictionary mapping gloss strings to their frequency count.
+        info: Sample information dictionary.
+
+    Returns:
+        Updated total_dict with incremented gloss counts.
+    """
     for k, v in info.items():
         if not isinstance(k, int):
             continue
@@ -48,6 +63,16 @@ def sign_dict_update(total_dict, info):
 
 
 def resize_img(img_path, dsize='210x260px', check_broken=False):
+    """Resize an image to the specified resolution.
+
+    Args:
+        img_path: Path to the input image.
+        dsize: Target resolution string, e.g. '256x256px'.
+        check_broken: If True, print a warning for unreadable images.
+
+    Returns:
+        Resized image as a numpy array, or None if the image is broken.
+    """
     dsize = tuple(int(res) for res in re.findall("\d+", dsize))
     img = cv2.imread(img_path)
     if img is None and check_broken:
@@ -58,12 +83,31 @@ def resize_img(img_path, dsize='210x260px', check_broken=False):
 
 
 def run_mp_cmd(processes, process_func, process_args):
+    """Run a function in parallel using multiprocessing.
+
+    Args:
+        processes: Number of processes in the pool.
+        process_func: Function to apply to each argument.
+        process_args: Iterable of arguments for the function.
+
+    Returns:
+        List of outputs from the function calls.
+    """
     with Pool(processes) as p:
         outputs = list(tqdm(p.imap(process_func, process_args), total=len(process_args)))
     return outputs
 
 
 def run_cmd(func, args):
+    """Run a single function call (serial fallback for multiprocessing).
+
+    Args:
+        func: Function to call.
+        args: Argument to pass to the function.
+
+    Returns:
+        Output from the function call.
+    """
     return func(args)
 
 
@@ -72,6 +116,16 @@ def run_cmd(func, args):
 # ---------------------------------------------------------------------------
 
 def phoenix2014_csv2dict(anno_path, dataset_type):
+    """Parse Phoenix2014 CSV annotation into a sample information dictionary.
+
+    Args:
+        anno_path: Path to the annotation CSV file.
+        dataset_type: Dataset split type ('train', 'dev', 'test').
+
+    Returns:
+        Dictionary mapping sample indices to file info dicts, with a 'prefix'
+        key for the image root path.
+    """
     inputs_list = pandas.read_csv(anno_path)
     if dataset_type == 'train':
         broken_data = [2390]
@@ -95,6 +149,16 @@ def phoenix2014_csv2dict(anno_path, dataset_type):
 
 
 def phoenix2014_t_csv2dict(anno_path, dataset_type):
+    """Parse Phoenix2014-T CSV annotation into a sample information dictionary.
+
+    Args:
+        anno_path: Path to the annotation CSV file.
+        dataset_type: Dataset split type ('train', 'dev', 'test').
+
+    Returns:
+        Dictionary mapping sample indices to file info dicts, with a 'prefix'
+        key for the image root path.
+    """
     inputs_list = pandas.read_csv(anno_path)
     inputs_list = (inputs_list.to_dict()['name|video|start|end|speaker|orth|translation'].values())
     info_dict = dict()
@@ -115,6 +179,13 @@ def phoenix2014_t_csv2dict(anno_path, dataset_type):
 
 
 def phoenix_resize_dataset(video_idx, dsize, info_dict):
+    """Resize all images for a single video sample.
+
+    Args:
+        video_idx: Index of the video in the info_dict.
+        dsize: Target resolution string, e.g. '256x256px'.
+        info_dict: Dictionary of sample information.
+    """
     info = info_dict[video_idx]
     img_list = glob.glob(f"{info_dict['prefix']}/{info['folder']}")
     for img_path in img_list:
@@ -126,6 +197,15 @@ def phoenix_resize_dataset(video_idx, dsize, info_dict):
 
 
 def process_phoenix(args, csv2dict):
+    """Run the full preprocessing pipeline for Phoenix2014 or Phoenix2014-T.
+
+    Generates information dicts, gloss dictionaries, ground truth STM files,
+    and optionally resizes images for all splits.
+
+    Args:
+        args: Parsed command-line arguments.
+        csv2dict: Function to parse CSV annotations (dataset-specific).
+    """
     mode = ["dev", "test", "train"]
     sign_dict = dict()
     if not os.path.exists(f"./{args.dataset}"):
@@ -159,6 +239,14 @@ def process_phoenix(args, csv2dict):
 # ---------------------------------------------------------------------------
 
 def csl_daily_csv2dict(anno_path):
+    """Parse CSL-Daily annotation file into a sample information dictionary.
+
+    Args:
+        anno_path: Path to the annotation text file.
+
+    Returns:
+        Dictionary mapping sample indices to file info dicts.
+    """
     with open(anno_path, 'r', encoding='utf-8') as f:
         inputs_list = f.readlines()
     info_dict = dict()
@@ -177,6 +265,15 @@ def csl_daily_csv2dict(anno_path):
 
 
 def csl_daily_resize_dataset(video_idx, dsize, info_dict, dataset_root, target_path):
+    """Resize all images for a single CSL-Daily video sample.
+
+    Args:
+        video_idx: Index of the video in the info_dict.
+        dsize: Target resolution string, e.g. '256x256px'.
+        info_dict: Dictionary of sample information.
+        dataset_root: Root path of the original dataset.
+        target_path: Target path for resized images.
+    """
     info = info_dict[video_idx]
     img_list = glob.glob(f"{dataset_root}/{info['folder']}")
     if len(img_list) == len(glob.glob(f"{target_path}/{info['folder']}")):
@@ -193,6 +290,14 @@ def csl_daily_resize_dataset(video_idx, dsize, info_dict, dataset_root, target_p
 
 
 def process_csl_daily(args):
+    """Run the full preprocessing pipeline for CSL-Daily.
+
+    Generates information dicts per split, gloss dictionaries, ground truth
+    STM files, and optionally resizes images.
+
+    Args:
+        args: Parsed command-line arguments.
+    """
     mode = ["train", "dev", "test"]
     sign_dict = dict()
     if not os.path.exists(f"./{args.dataset}"):
