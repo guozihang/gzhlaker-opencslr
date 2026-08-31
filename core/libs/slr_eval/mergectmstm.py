@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import sys
-import pdb
 
 ctmFile = sys.argv[1]
 stmFile = sys.argv[2]

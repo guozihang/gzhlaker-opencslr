@@ -22,15 +22,17 @@ def evaluate(prefix="./", mode="dev", evaluate_dir=None, evaluate_prefix=None,
 
     流程:
       1. preprocess.sh 清洗假设 CTM(去特殊标签、合并重复词);
-      2. ground-truth STM 按句 ID 排序(等价 sort -k1,1);
+      2. ground-truth STM(evaluate_dir/groundtruth/)按句 ID 排序(等价 sort -k1,1);
       3. mergectmstm.py 为缺失句补齐 [EMPTY] 行;
       4. pysclite 对齐 CTM 与 STM,输出 sum/rsum/pra 报告并计算 WER。
 
     Args:
         prefix: 输出路径前缀(通常是 work_dir,以 / 结尾)。
         mode: 评估模式("dev"/"test"),用于选择 ground-truth 文件。
-        evaluate_dir: slr_eval 工具目录(含 preprocess.sh、*.stm 等)。
-        evaluate_prefix: ground-truth 文件名前缀(如 "phoenix2014-groundtruth")。
+        evaluate_dir: slr_eval 工具目录(含 preprocess.sh、mergectmstm.py 与
+            groundtruth/ 子目录)。
+        evaluate_prefix: ground-truth 文件名前缀(如 "phoenix2014-groundtruth"),
+            对应 groundtruth/ 下的 {prefix}-{mode}.stm 文件。
         output_file: 模型输出的假设 CTM 文件名。
         output_dir: 可选,报告输出子目录(相对 prefix)。
 
@@ -45,7 +47,8 @@ def evaluate(prefix="./", mode="dev", evaluate_dir=None, evaluate_prefix=None,
     hyp_file = prefix + output_file
     tmp_ctm = prefix + "tmp.ctm"
     tmp2_ctm = prefix + "tmp2.ctm"
-    stm_src = os.path.join(evaluate_dir, "{}-{}.stm".format(evaluate_prefix, mode))
+    stm_src = os.path.join(evaluate_dir, "groundtruth",
+                           "{}-{}.stm".format(evaluate_prefix, mode))
     tmp_stm = prefix + "tmp.stm"
 
     # 1. 清洗假设 CTM(与 sclite 版流程一致)
