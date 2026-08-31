@@ -5,7 +5,7 @@ converting sequence logits into recognized gloss sequences.
 """
 
 import torch
-import ctcdecode
+from libs.ctcdecode import CTCBeamDecoder
 from itertools import groupby
 from models.keys import Keys, require
 
@@ -27,8 +27,8 @@ class Decode(object):
         self.search_mode = search_mode
         self.blank_id = blank_id
         vocab = [chr(x) for x in range(20000, 20000 + num_classes)]
-        self.ctc_decoder = ctcdecode.CTCBeamDecoder(vocab, beam_width=10, blank_id=blank_id,
-                                                    num_processes=10)
+        self.ctc_decoder = CTCBeamDecoder(vocab, beam_width=10, blank_id=blank_id,
+                                          num_processes=10)
 
     def decode(self, nn_output, vid_lgt, batch_first=True, probs=False):
         """Decode model output into gloss sequences.
@@ -52,7 +52,7 @@ class Decode(object):
     def BeamSearch(self, nn_output, vid_lgt, probs=False):
         """CTC beam search decoding.
 
-        Uses ctcdecode's CTCBeamDecoder for beam search decoding.
+        Uses the built-in libs.ctcdecode CTCBeamDecoder (pure Python port) for beam search decoding.
 
         CTCBeamDecoder shapes:
             Input:  nn_output (B, T, N), should be passed through a softmax layer

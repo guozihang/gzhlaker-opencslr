@@ -6,8 +6,8 @@ import pdb
 ctmFile = sys.argv[1]
 stmFile = sys.argv[2]
 
-ctm = open(ctmFile, "r")
-stm = open(stmFile, "r")
+ctm = open(ctmFile, "r", encoding="utf-8")
+stm = open(stmFile, "r", encoding="utf-8")
 
 ctmDict = []
 stmDict = []
@@ -29,7 +29,7 @@ for idx, line in enumerate(stm):
 
 stm.close()
 ctm.close()
-ctm = open(ctmFile, "w+")
+ctm = open(ctmFile, "w+", encoding="utf-8")
 
 for l in ctmDict:
     ctm.write(" ".join(l) + "\n")

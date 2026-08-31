@@ -42,6 +42,8 @@ EXCLUDED_DIRS = [
     "models/modules/slowfast",
     "libs/sync_batchnorm",
     "libs/slr_eval",
+    "libs/ctcdecode",
+    "libs/pysclite",
 ]
 
 # 顶层包/文件的分组标题(用于 api.rst 索引)

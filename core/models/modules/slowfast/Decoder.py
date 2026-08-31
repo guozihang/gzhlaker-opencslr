@@ -2,7 +2,7 @@ import os
 import pdb
 import time
 import torch
-import ctcdecode
+from libs.ctcdecode import CTCBeamDecoder
 import numpy as np
 from itertools import groupby
 import torch.nn.functional as F
@@ -69,8 +69,8 @@ class Decode(object):
         self.search_mode = search_mode
         self.blank_id = blank_id
         vocab = [chr(x) for x in range(20000, 20000 + num_classes)]
-        self.ctc_decoder = ctcdecode.CTCBeamDecoder(vocab, beam_width=10, blank_id=blank_id,
-                                                    num_processes=10)
+        self.ctc_decoder = CTCBeamDecoder(vocab, beam_width=10, blank_id=blank_id,
+                                          num_processes=10)
 
     def decode(self, nn_output, vid_lgt, batch_first=True, probs=False):
         """执行解码。
