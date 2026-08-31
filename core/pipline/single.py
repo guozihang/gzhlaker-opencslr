@@ -15,7 +15,7 @@ import sys
 import torch
 import torch.distributed as dist
 import numpy as np
-from libs.slr_eval.evaluation_manager import evaluate
+from manager.evaluation_manager import EvaluationManager
 from torch.cuda.amp import autocast as autocast
 from torch.cuda.amp import GradScaler
 from tqdm import tqdm
@@ -104,7 +104,7 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
     """执行一个 epoch 的评估。
 
     遍历验证集或测试集,收集模型识别结果并写入假设文件,然后调用
-    `evaluate` 计算 WER(词错误率)。支持跳过帧数超限的 batch 和
+    `EvaluationManager.evaluate` 计算 WER(词错误率)。支持跳过帧数超限的 batch 和
     处理 GPU 运行时错误(可选跳过)。
 
     Args:
@@ -163,10 +163,10 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
     try:
         LogManager.info(work_dir)
         write2file(work_dir + "output-hypothesis-{}.ctm".format(mode), total_info, total_sent)
-        ret = evaluate(prefix=work_dir, mode=mode, output_file="output-hypothesis-{}.ctm".format(mode),
-                       evaluate_dir=cfg.dataset_info['evaluation_dir'],
-                       evaluate_prefix=cfg.dataset_info['evaluation_prefix'],
-                       output_dir="epoch_{}_result/".format(epoch))
+        ret = EvaluationManager.evaluate(prefix=work_dir, mode=mode, output_file="output-hypothesis-{}.ctm".format(mode),
+                                         evaluate_dir=cfg.dataset_info['evaluation_dir'],
+                                         evaluate_prefix=cfg.dataset_info['evaluation_prefix'],
+                                         output_dir="epoch_{}_result/".format(epoch))
     except Exception as e:
         LogManager.error(f"Unexpected error during evaluation: {e}")
         ret = "Percent Total Error       =  100.00%   (ERROR)"
