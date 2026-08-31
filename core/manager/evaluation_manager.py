@@ -1,19 +1,21 @@
 # -*- encoding: utf-8 -*-
 """WER 评估管理器模块。
 
-基于仓库内置 pysclite(纯 Python 移植版 sclite)的评估流程,无任何编译依赖。
-与初始化链中的其他管理器不同,本管理器不持有跨模块状态,在评估阶段按需调用。
+基于仓库内置 pysclite(纯 Python 移植版 sclite)的评估流程,无任何编译依赖,
+也无需 shell 工具(原 preprocess.sh 的 sed/awk/perl 清洗逻辑已移植为
+preprocess_hyp)。与初始化链中的其他管理器不同,本管理器不持有跨模块状态,
+在评估阶段按需调用。
 
 流程:
-  1. preprocess.sh 清洗假设 CTM(去特殊标签、合并重复词);
+  1. preprocess_hyp 清洗假设 CTM(标注归一、去特殊标签、合并重复词);
   2. ground-truth STM(evaluate_dir/groundtruth/)按句 ID 排序(等价 sort -k1,1);
   3. merge_ctm_stm 为缺失句补齐 [EMPTY] 行;
   4. pysclite 对齐 CTM 与 STM,输出 sum/rsum/pra 报告并计算 WER。
 """
 
 import os
+import re
 import shutil
-import subprocess
 
 from libs.pysclite import scores as _sc
 from libs.pysclite import stmctm as _stmctm
@@ -22,9 +24,93 @@ from libs.pysclite import stmctm as _stmctm
 class EvaluationManager:
     """WER 评估管理器,提供 CTM/STM 对齐评分与报告输出。
 
-    评估所需数据(groundtruth/*.stm)与清洗脚本(preprocess.sh)位于
-    libs/slr_eval/,由 ``evaluate_dir`` 参数指定。
+    评估所需数据(groundtruth/*.stm)位于 libs/slr_eval/,由
+    ``evaluate_dir`` 参数指定。
     """
+
+    @classmethod
+    def preprocess_hyp(cls, hyp_file, output_file):
+        """清洗假设 CTM(原 preprocess.sh 的纯 Python 移植,规则逐条对应)。
+
+        处理步骤与原 bash 脚本一致:
+          1. 标注归一(sed 部分):loc-/cl-/qu-/poss-/lh- 前缀、S0NNE/HABEN2、
+             特殊标签、WIE AUSSEHEN / ZEIGEN 复合词、指拼词 A B -> A+B 等;
+          2. 合并连续重复词(perl 部分,4 遍);
+          3. 去掉含特殊标签的行(grep -v 部分);
+          4. 词被清空的句补 [EMPTY](awk 部分);
+          5. 按句 ID 与起始时间排序(sort -k1,1 -k3,3 部分)。
+
+        Args:
+            hyp_file: 模型输出的假设 CTM 文件(每行 5 列)。
+            output_file: 清洗后 CTM 输出路径。
+        """
+        with open(hyp_file, "r", encoding="utf-8") as f:
+            raw_lines = f.readlines()
+
+        cleaned = []
+        for line in raw_lines:
+            line = line.rstrip("\n")
+
+            # 1. sed 部分:标注归一(规则顺序与原脚本一致)
+            line = (line.replace("loc-", "").replace("cl-", "")
+                        .replace("qu-", "").replace("poss-", "")
+                        .replace("lh-", "")
+                        .replace("S0NNE", "SONNE").replace("HABEN2", "HABEN")
+                        .replace("__EMOTION__", "").replace("__PU__", "")
+                        .replace("__LEFTHAND__", "")
+                        .replace("WIE AUSSEHEN", "WIE-AUSSEHEN")
+                        .replace("ZEIGEN ", "ZEIGEN-BILDSCHIRM "))
+            line = re.sub(r"ZEIGEN$", "ZEIGEN-BILDSCHIRM", line)
+            line = re.sub(r"^([A-Z]) ([A-Z][+ ])", r"\1+\2", line)
+            line = re.sub(r"[ +]([A-Z]) ([A-Z]) ", r" \1+\2 ", line)
+            for _ in range(3):  # 原脚本连续 3 个 sed 重复此规则
+                line = re.sub(r"([ +][A-Z]) ([A-Z][ +])", r"\1+\2", line)
+            line = re.sub(r"([ +]SCH) ([A-Z][ +])", r"\1+\2", line)
+            line = re.sub(r"([ +]NN) ([A-Z][ +])", r"\1+\2", line)
+            line = re.sub(r"([ +][A-Z]) (NN[ +])", r"\1+\2", line)
+            line = re.sub(r"([ +][A-Z]) ([A-Z])$", r"\1+\2", line)
+            line = re.sub(r"([A-Z][A-Z])RAUM", r"\1", line)
+            line = line.replace("-PLUSPLUS", "")
+
+            # 2. perl 部分:合并连续重复词(原脚本 4 个 perl 各一遍)
+            for _ in range(4):
+                line = re.sub(r"(?<![\w-])(\b[A-Z]+(?![\w-])) \1(?![\w-])",
+                              r"\1", line)
+
+            # 3. grep -v 部分:去掉含特殊标签的行
+            if any(tok in line for tok in
+                   ("__LEFTHAND__", "__EPENTHESIS__", "__EMOTION__")):
+                continue
+
+            # 4. sed 's,\s*$,':去行尾空白。按原脚本 GNU sed 语义实现(\s 即空白);
+            #    macOS 的 BSD sed 把 \s 当字面 's'(会误删行尾小写 s 且不去空白),
+            #    属平台缺陷;本实现与下游行为(按空白切分)对 WER 无影响。
+            cleaned.append(line.rstrip())
+
+        # 5. awk 部分:词被清空($5 为空)的行不输出,并为其句补 [EMPTY]
+        cnt = {}
+        last_id = ""
+        last_row = ""
+        filled = []
+        for line in cleaned:
+            fields = line.split()
+            cur_id = fields[0] if fields else ""
+            if last_id != cur_id and cnt.get(last_id, 0) < 1 and last_row:
+                filled.append(last_row + " [EMPTY]")
+            if len(fields) >= 5 and fields[4] != "":
+                cnt[cur_id] = cnt.get(cur_id, 0) + 1
+                filled.append(line)
+            last_id = cur_id
+            last_row = line
+
+        # 6. sort -k1,1 -k3,3 部分:按句 ID、起始时间排序(键相同时按整行,
+        #    与原 sort 的兜底比较一致)
+        filled.sort(key=lambda l: (l.split(None, 2)[0] if l.split() else "",
+                                   l.split()[2] if len(l.split()) > 2 else "", l))
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            for line in filled:
+                f.write(line + "\n")
 
     @classmethod
     def merge_ctm_stm(cls, ctm_file, stm_file):
@@ -67,7 +153,7 @@ class EvaluationManager:
         Args:
             prefix: 输出路径前缀(通常是 work_dir,以 / 结尾)。
             mode: 评估模式("dev"/"test"),用于选择 ground-truth 文件。
-            evaluate_dir: slr_eval 工具目录(含 preprocess.sh 与 groundtruth/ 子目录)。
+            evaluate_dir: slr_eval 工具目录(含 groundtruth/ 子目录)。
             evaluate_prefix: ground-truth 文件名前缀(如 "phoenix2014-groundtruth"),
                 对应 groundtruth/ 下的 {prefix}-{mode}.stm 文件。
             output_file: 模型输出的假设 CTM 文件名。
@@ -82,15 +168,13 @@ class EvaluationManager:
         output_file = output_file or "output-hypothesis-{}.ctm".format(mode)
 
         hyp_file = prefix + output_file
-        tmp_ctm = prefix + "tmp.ctm"
         tmp2_ctm = prefix + "tmp2.ctm"
         stm_src = os.path.join(evaluate_dir, "groundtruth",
                                "{}-{}.stm".format(evaluate_prefix, mode))
         tmp_stm = prefix + "tmp.stm"
 
-        # 1. 清洗假设 CTM
-        subprocess.check_call(
-            ["bash", os.path.join(evaluate_dir, "preprocess.sh"), hyp_file, tmp_ctm, tmp2_ctm])
+        # 1. 清洗假设 CTM(纯 Python,无需 shell 工具)
+        cls.preprocess_hyp(hyp_file, tmp2_ctm)
 
         # 2. ground-truth STM 按句 ID 排序(字节序,与 sort -k1,1 行为一致)
         with open(stm_src, "rb") as f:
