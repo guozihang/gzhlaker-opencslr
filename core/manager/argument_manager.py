@@ -6,6 +6,9 @@
 """
 
 import argparse
+import copy
+import json
+import os
 import yaml
 
 
@@ -90,6 +93,7 @@ class ArgumentManager:
         )
         parser.add_argument (
             '--dataset-info' ,
+            type = json_dict,
             default = dict ( ) ,
             help = 'data loader will be used'
         )
@@ -100,6 +104,7 @@ class ArgumentManager:
             help = 'the number of worker for data loader' )
         parser.add_argument (
             '--feeder-args' ,
+            type = json_dict,
             default = dict ( ) ,
             help = 'the arguments of data loader' )
 
@@ -108,7 +113,7 @@ class ArgumentManager:
         parser.add_argument ( '--model' , default = None , help = 'the model will be used' )
         parser.add_argument (
             '--model-args' ,
-            type = dict ,
+            type = json_dict,
             default = dict ( ) ,
             help = 'the arguments of model' )
         parser.add_argument (
@@ -221,24 +226,57 @@ class ArgumentManager:
 
     @classmethod
     def map( cls, config):
-        """将配置字典映射到参数解析器，并加载数据集配置。
+        """将 YAML 配置深度合并到默认值，并保留 CLI 覆盖优先级。
 
-        将 YAML 配置中的参数更新到解析器的默认值中，然后重新解析参数。
-        同时根据 dataset 参数加载对应的数据集配置文件。
-
-        Args:
-            config: 配置字典，包含实验配置参数
+        配置优先级为：命令行参数 > 实验 YAML > 代码默认值。
         """
-        key = vars ( getattr(cls, 'ARGS') ).keys ( )
-        for k in config.keys ( ) :
-            if k not in key :
-                print ( 'WRONG ARG: {}'.format ( k ) )
-                assert (k in key)
-        getattr(cls, 'PARSER').set_defaults ( **config )
+        if not isinstance(config, dict):
+            raise TypeError("experiment config must be a mapping")
+
+        argument_names = set(vars(cls.get()))
+        unknown = set(config) - argument_names
+        if unknown:
+            raise ValueError(f"Unknown argument(s): {', '.join(sorted(unknown))}")
+
+        cli_values = vars(cls.get_parser().parse_args())
+        defaults = vars(cls.get_parser().parse_args([]))
+        merged = cls._deep_merge(defaults, config)
+        merged = cls._restore_cli_values(merged, cli_values, defaults)
+        cls.get_parser().set_defaults(**merged)
         cls.parse()
-        dataset_config_path = f"./configs/{ArgumentManager.get ( 'dataset' )}.yaml"
-        with open(dataset_config_path, 'r') as f:
-            getattr(cls, 'ARGS').dataset_info = yaml.load(f, Loader=yaml.FullLoader)
+
+        dataset = cls.get("dataset")
+        if not dataset:
+            raise ValueError("dataset must be configured before loading dataset metadata")
+        config_dir = os.path.dirname(os.path.abspath(cls.get("config")))
+        dataset_config_path = os.path.join(config_dir, f"{dataset}.yaml")
+        with open(dataset_config_path, "r", encoding="utf-8") as reader:
+            dataset_info = yaml.safe_load(reader) or {}
+        if not isinstance(dataset_info, dict):
+            raise TypeError("dataset config must be a mapping")
+        cls.ARGS.dataset_info = cls._deep_merge(cls.ARGS.dataset_info, dataset_info)
+
+    @staticmethod
+    def _deep_merge(base, override):
+        """递归合并字典；嵌套字典逐层合并，其它值由 override 替换。"""
+        result = copy.deepcopy(base)
+        for key, value in override.items():
+            if isinstance(result.get(key), dict) and isinstance(value, dict):
+                result[key] = ArgumentManager._deep_merge(result[key], value)
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
+
+    @staticmethod
+    def _restore_cli_values(merged, cli_values, parser_defaults):
+        """只恢复实际出现在命令行中的参数，避免默认值覆盖 YAML。"""
+        import sys
+        cli_names = {item.lstrip("-").replace("-", "_").split("=")[0]
+                     for item in sys.argv[1:] if item.startswith("-")}
+        for name, value in cli_values.items():
+            if name in cli_names and value != parser_defaults.get(name):
+                merged[name] = value
+        return merged
 
 def str2bool(v):
     """将字符串转换为布尔值。

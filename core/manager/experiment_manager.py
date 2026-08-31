@@ -62,16 +62,17 @@ class ExperimentManager:
         生成器的种子，确保实验结果可复现。
         """
         if cls.arg.random_fix:
+            seed = cls.arg.random_seed + DeviceManager.rank
             torch.set_num_threads ( 1 )
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-            torch.manual_seed ( cls.arg.random_seed )
-            torch.cuda.manual_seed_all ( cls.arg.random_seed )
-            np.random.seed ( cls.arg.random_seed )
-            random.seed ( cls.arg.random_seed )
+            torch.manual_seed ( seed )
+            torch.cuda.manual_seed_all ( seed )
+            np.random.seed ( seed )
+            random.seed ( seed )
 
     @classmethod
-    def save_rng_state(self):
+    def save_rng_state(cls):
         """保存当前随机数生成器状态。
 
         分别保存 Torch、CUDA、NumPy、Python 内置随机数生成器的状态，
@@ -82,13 +83,13 @@ class ExperimentManager:
         """
         rng_dict = {}
         rng_dict["torch"] = torch.get_rng_state()
-        rng_dict["cuda"] = torch.cuda.get_rng_state_all()
+        rng_dict["cuda"] = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         rng_dict["numpy"] = np.random.get_state()
         rng_dict["random"] = random.getstate()
         return rng_dict
 
     @classmethod
-    def set_rng_state(self, rng_dict):
+    def set_rng_state(cls, rng_dict):
         """恢复随机数生成器状态。
 
         从保存的状态字典中恢复 Torch、CUDA、NumPy、Python 内置
@@ -98,7 +99,8 @@ class ExperimentManager:
             rng_dict: 包含各随机数生成器状态的字典
         """
         torch.set_rng_state(rng_dict["torch"])
-        torch.cuda.set_rng_state_all(rng_dict["cuda"])
+        if rng_dict.get("cuda") is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng_dict["cuda"])
         np.random.set_state(rng_dict["numpy"])
         random.setstate(rng_dict["random"])
 
@@ -122,6 +124,8 @@ class ExperimentManager:
             cls.run_train()
         elif cls.arg.phase == 'test':
             cls.run_test()
+        else:
+            raise ValueError(f"Unsupported phase: {cls.arg.phase!r}. Expected 'train' or 'test'.")
 
     @classmethod
     def run_train( cls ):
@@ -138,6 +142,8 @@ class ExperimentManager:
             save_model = epoch % cls.arg.save_interval == 0
             eval_model = epoch % cls.arg.eval_interval == 0
             epoch_time = time.time ( )
+            dev_wer = best_dev
+            DataloaderManager.set_epoch('train', epoch)
             seq_train (
                 DataloaderManager.DATALOADER['train'],
                 cls.model ,
@@ -147,45 +153,56 @@ class ExperimentManager:
                 epoch ,
                 loss_weights = cls.arg.loss_weights
             )
-            if eval_model :
-                dev_wer = seq_eval (
-                    cls.arg ,
-                    DataloaderManager.DATALOADER['dev'],
-                    cls.model ,
-                    cls.device ,
-                    'dev' ,
-                    epoch ,
-                    cls.arg.work_dir
-                )
-                test_wer = seq_eval (
-                    cls.arg ,
-                    DataloaderManager.DATALOADER [ 'test' ] ,
-                    cls.model ,
-                    cls.device ,
-                    'test' ,
-                    epoch ,
-                    cls.arg.work_dir
-                )
-                LogManager.info ( {"Dev": dev_wer} )
-                LogManager.info ( {"Test": test_wer} )
+            if eval_model:
+                # 确保所有进程同步进入评估阶段，避免非主进程提前开始下一 epoch
+                DeviceManager.barrier()
+                if DeviceManager.is_main_process():
+                    dev_wer = seq_eval(
+                        cls.arg,
+                        DataloaderManager.DATALOADER['dev'],
+                        cls.model,
+                        cls.device,
+                        'dev',
+                        epoch,
+                        cls.arg.work_dir
+                    )
+                    test_wer = seq_eval(
+                        cls.arg,
+                        DataloaderManager.DATALOADER['test'],
+                        cls.model,
+                        cls.device,
+                        'test',
+                        epoch,
+                        cls.arg.work_dir
+                    )
+                    LogManager.info({"Dev": dev_wer})
+                    LogManager.info({"Test": test_wer})
+                DeviceManager.barrier()
             if dev_wer < best_dev :
                 best_dev = dev_wer
                 best_epoch = epoch
                 model_path = "{}_best_model.pt".format ( cls.arg.work_dir )
                 cls.save_model ( epoch , model_path )
-                LogManager.info ( 'Save best model' )
-            LogManager.info ( 'Best_dev: {:05.2f}, Epoch : {}'.format ( best_dev , best_epoch ) )
-            if save_model :
-                model_path = "{}dev_{:05.2f}_epoch{}_model.pt".format ( cls.arg.work_dir , dev_wer , epoch )
-                seq_model_list.append ( model_path )
-                cls.save_model ( epoch , model_path )
-            epoch_time = time.time ( ) - epoch_time
+                if DeviceManager.is_main_process ( ) :
+                    LogManager.info ( 'Save best model' )
+            if DeviceManager.is_main_process ( ) :
+                LogManager.info ( 'Best_dev: {:05.2f}, Epoch : {}'.format ( best_dev , best_epoch ) )
+            if save_model:
+                model_path = "{}dev_{:05.2f}_epoch{}_model.pt".format(cls.arg.work_dir, dev_wer, epoch)
+                seq_model_list.append(model_path)
+                cls.save_model(epoch, model_path)
+            # 每个 epoch 结束后同步所有进程，避免非主进程提前进入下一 epoch
+            DeviceManager.barrier()
+            epoch_time = time.time() - epoch_time
             total_time += epoch_time
-            LogManager.info ('Epoch {} costs {} mins {} seconds'.format ( epoch , int ( epoch_time ) // 60 ,
-                                                                           int ( epoch_time ) % 60 ) )
-        LogManager.info ( 'Training costs {} hours {} mins {} seconds'.format ( int ( total_time ) // 60 // 60 ,
-                                                                                int ( total_time ) // 60 % 60 ,
-                                                                                int ( total_time ) % 60 ) )
+            if DeviceManager.is_main_process ( ) :
+                LogManager.info ('Epoch {} costs {} mins {} seconds'.format ( epoch , int ( epoch_time ) // 60 ,
+                                                                               int ( epoch_time ) % 60 ) )
+        DeviceManager.barrier()
+        if DeviceManager.is_main_process ( ) :
+            LogManager.info ( 'Training costs {} hours {} mins {} seconds'.format ( int ( total_time ) // 60 // 60 ,
+                                                                                    int ( total_time ) // 60 % 60 ,
+                                                                                    int ( total_time ) % 60 ) )
 
     @classmethod
     def run_test( cls ):
@@ -197,9 +214,11 @@ class ExperimentManager:
                              "dev" , 6667 , cls.arg.work_dir)
         test_wer = seq_eval ( cls.arg , DataloaderManager.DATALOADER [ "test" ] , cls.model , cls.device ,
                               "test" , 6667 , cls.arg.work_dir)
-        LogManager.info ( 'Dev WER: {:05.2f}\n'.format ( dev_wer ) )
-        LogManager.info ( 'Test WER: {:05.2f}\n'.format ( test_wer ) )
-        LogManager.info ( 'Evaluation Done.\n' )
+        DeviceManager.barrier()
+        if DeviceManager.is_main_process ( ) :
+            LogManager.info ( 'Dev WER: {:05.2f}\n'.format ( dev_wer ) )
+            LogManager.info ( 'Test WER: {:05.2f}\n'.format ( test_wer ) )
+            LogManager.info ( 'Evaluation Done.\n' )
 
     @classmethod
     def run_inference(cls, video_data, video_length):
@@ -241,29 +260,37 @@ class ExperimentManager:
 
     @classmethod
     def model_to_device(cls, model):
-        """将模型迁移到指定设备，并为多 GPU 配置 DataParallel。
-
-        将模型移至目标设备，若 GPU 数量大于 1，
-        则对 spatial_module_container 应用 DataParallel。
+        """将模型迁移到指定设备并包装 DDP。
 
         Args:
             model: 待迁移的模型实例
 
         Returns:
-            nn.Module: 迁移到设备后的模型
+            nn.Module: 迁移并可能包装后的模型
         """
         model = model.to(DeviceManager.output_device)
-        if len(DeviceManager.gpu_list) > 1:
-            model.spatial_module_container = nn.DataParallel(
-                model.spatial_module_container,
+        if DeviceManager.is_distributed:
+            # 多机多卡场景下使用 PyTorch 原生 SyncBatchNorm，实现跨进程 BN 统计量同步。
+            if DeviceManager.output_device.type == "cuda":
+                model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+                LogManager.info("Converted BatchNorm to SyncBatchNorm for DDP training.")
+            model = nn.parallel.DistributedDataParallel(
+                model,
+                device_ids=[DeviceManager.local_rank] if DeviceManager.output_device.type == "cuda" else None,
+                output_device=DeviceManager.local_rank if DeviceManager.output_device.type == "cuda" else None,
+                find_unused_parameters=True,
+            )
+        elif len(DeviceManager.gpu_list) > 1:
+            model = nn.DataParallel(
+                model,
                 device_ids=DeviceManager.gpu_list,
-                output_device=DeviceManager.output_device)
-        model.cuda()
+                output_device=0,
+            )
         return model
 
     @classmethod
     def save_model ( cls , epoch , save_path ) :
-        """保存模型检查点。
+        """保存模型检查点（仅 rank 0）。
 
         保存当前 epoch、模型状态字典、优化器状态、调度器状态和随机数生成器状态。
 
@@ -271,9 +298,12 @@ class ExperimentManager:
             epoch: 当前训练轮数
             save_path: 模型保存路径
         """
+        if not DeviceManager.is_main_process():
+            return
+        model_state = cls.model.module.state_dict() if hasattr(cls.model, 'module') else cls.model.state_dict()
         torch.save ( {
             'epoch' : epoch ,
-            'model_state_dict' : cls.model.state_dict ( ) ,
+            'model_state_dict' : model_state ,
             'optimizer_state_dict' : cls.optimizer.state_dict ( ) ,
             'scheduler_state_dict' : cls.scheduler.state_dict ( ) ,
             'rng_state' : cls.save_rng_state ( ) ,
@@ -289,19 +319,22 @@ class ExperimentManager:
             model: 模型实例
             weight_path: 权重文件路径
         """
-        state_dict = torch.load(weight_path)
+        state_dict = torch.load(weight_path, map_location=DeviceManager.output_device)
+        if 'model_state_dict' in state_dict:
+            state_dict = state_dict['model_state_dict']
         if len(cls.arg.ignore_weights):
             for w in cls.arg.ignore_weights:
                 if state_dict.pop(w, None) is not None:
-                    print('Successfully Remove Weights: {}.'.format(w))
+                    LogManager.info('Successfully Remove Weights: {}.'.format(w))
                 else:
-                    print('Can Not Remove Weights: {}.'.format(w))
-        weights = cls.modified_weights(state_dict['model_state_dict'], False)
-        cls.model.load_state_dict(weights, strict=True)
+                    LogManager.info('Can Not Remove Weights: {}.'.format(w))
+        weights = cls.modified_weights(state_dict, False)
+        model_to_load = model.module if hasattr(model, 'module') else model
+        model_to_load.load_state_dict(weights, strict=True)
 
     @staticmethod
     def modified_weights(state_dict, modified=False):
-        """修改模型权重的键名，移除 DataParallel 添加的 '.module' 前缀。
+        """修改模型权重的键名，移除 DDP/DataParallel 添加的 'module.' 前缀。
 
         Args:
             state_dict: 原始状态字典
@@ -310,7 +343,9 @@ class ExperimentManager:
         Returns:
             OrderedDict: 修改后的状态字典
         """
-        state_dict = OrderedDict([(k.replace('.module.', '.'), v) for k, v in state_dict.items()])
+        state_dict = OrderedDict([
+            (k.replace('module.', ''), v) for k, v in state_dict.items()
+        ])
         if not modified:
             return state_dict
         modified_dict = dict()
@@ -328,8 +363,9 @@ class ExperimentManager:
             optimizer: 优化器实例
         """
         cls.load_model_weights(model, cls.arg.load_checkpoints)
-        state_dict = torch.load(cls.arg.load_checkpoints)
-        if len(torch.cuda.get_rng_state_all()) == len(state_dict['rng_state']['cuda']):
+        state_dict = torch.load(cls.arg.load_checkpoints, map_location=DeviceManager.output_device)
+        rng_cuda = state_dict.get('rng_state', {}).get('cuda')
+        if rng_cuda is not None and torch.cuda.is_available() and len(torch.cuda.get_rng_state_all()) == len(rng_cuda):
             LogManager.info("Loading random seeds...")
             cls.set_rng_state(state_dict['rng_state'])
         if "optimizer_state_dict" in state_dict.keys():

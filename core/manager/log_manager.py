@@ -8,7 +8,6 @@ integration for experiment tracking and visualization.
 import datetime
 import os
 from pathlib import Path
-import datetime
 from typing import Any , Optional
 
 import wandb
@@ -19,6 +18,7 @@ from rich.rule import Rule
 from loguru import logger
 
 from .argument_manager import ArgumentManager
+from .device_manager import DeviceManager
 
 
 class LogManager :
@@ -32,13 +32,14 @@ class LogManager :
 
     _console: Optional [ Console ] = None
     _log_file: Optional [ Path ] = None
+    _sink_id: Optional [ int ] = None
     WANDB: bool = False
     TENSORBOARD: bool = False
 
     @classmethod
     def init ( cls , output_path: str = None ) -> None :
         """
-        Initialize the PrintManager with console and logging configuration.
+        Initialize the LogManager with console and logging configuration.
 
         Args:
             output_path: The path where log files should be stored. If None, will use ArgumentManger.get_output_path()
@@ -47,31 +48,36 @@ class LogManager :
         """
 
         try :
-            if output_path is None :
-                path = ArgumentManager.get ( "work_dir" )
-            if not os.path.exists ( path ) :
-                os.makedirs ( path )
+            path = output_path if output_path is not None else ArgumentManager.get("work_dir")
+            if not path or not isinstance(path, (str, os.PathLike)):
+                raise ValueError("Log output path must be a non-empty path")
+            path = os.fspath(path)
+            os.makedirs(path, exist_ok=True)
 
             cls._console = Console (
                 color_system = 'auto' ,
                 log_time_format = "[%Y-%m-%d %H:%M:%S]"
             )
-            log_path = Path ( path ) / f"log_{datetime.datetime.now ( ).strftime ( '%Y%m%d_%H%M%S' )}.log"
-            cls._log_file = log_path
-            logger.add ( str ( log_path ) )
+            if DeviceManager.is_main_process ( ) :
+                log_path = Path ( path ) / f"log_{datetime.datetime.now ( ).strftime ( '%Y%m%d_%H%M%S' )}.log"
+                cls._log_file = log_path
+                if cls._sink_id is not None:
+                    logger.remove(cls._sink_id)
+                cls._sink_id = logger.add(str(log_path))
         except Exception as e :
             logger.error ( f"Failed to initialize PrintManager: {str ( e )}" )
             raise
 
         try :
             wandb_config = ArgumentManager.get ( "wandb" )
-            if isinstance ( wandb_config , dict ) and wandb_config.get ( "enable" , False ) :
+            if DeviceManager.is_main_process ( ) and isinstance ( wandb_config , dict ) and wandb_config.get ( "enable" , False ) :
                 cls.init_wandb ( )
         except Exception as e :
             cls.WANDB = False
             logger.warning ( f"Failed to initialize wandb, continuing without it: {str ( e )}" )
 
-        LogManager.info_manager ( )
+        if DeviceManager.is_main_process ( ) :
+            LogManager.info_manager ( )
 
     @classmethod
     def init_wandb ( cls ) -> None :
@@ -86,7 +92,7 @@ class LogManager :
                 os.makedirs ( os.path.join ( output_path , "wandb" ) )
             wandb.init (
                 project = ArgumentManager.get ( "wandb" ).get ( "project" , "default_project" ) ,
-                config = ArgumentManager.get ( ) ,
+                config = vars ( ArgumentManager.get ( ) ) ,
                 entity = ArgumentManager.get ( "wandb" ).get ( "entity" , "default_entity" ) ,
                 dir = os.path.join ( output_path , "wandb/" ) ,
             )

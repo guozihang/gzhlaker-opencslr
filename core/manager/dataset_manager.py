@@ -43,6 +43,9 @@ class DatasetManager:
         for idx , (mode , train_flag) in enumerate ( cls.DATASET_LIST ) :
             dataset_arg = arg.feeder_args
             dataset_arg [ "prefix" ] = arg.dataset_info [ 'dataset_root' ]
+            for key in ("preprocess_root", "memmap_root", "feature_root", "image_feature_dir"):
+                if key in arg.dataset_info:
+                    dataset_arg[key] = arg.dataset_info[key]
             dataset_arg [ "mode" ] = mode.split ( "_" ) [ 0 ]
             dataset_arg [ "transform_mode" ] = train_flag
             dataset_arg [ 'dataset' ] = arg.dataset

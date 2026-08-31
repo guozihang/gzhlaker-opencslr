@@ -13,6 +13,7 @@ import faulthandler
 faulthandler.enable()
 import sys
 import torch
+import torch.distributed as dist
 import numpy as np
 from libs.slr_eval.wer_calculation import evaluate
 from torch.cuda.amp import autocast as autocast
@@ -59,7 +60,7 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
     total_loss_dict = {}    # dict of all types of loss
     clr = [group['lr'] for group in optimizer.param_groups]
     scaler = GradScaler()
-    for batch_idx, data in enumerate(tqdm(loader)):
+    for batch_idx, data in enumerate(tqdm(loader, disable=not DeviceManager.is_main_process())):
         data = {
             Keys.VID: DeviceManager.to(data[0]),
             Keys.VID_LGT: DeviceManager.to(data[1]),
@@ -71,7 +72,12 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
             ret_dict = model(data)
             loss = ret_dict[Keys.LOSS]
             loss_dict = ret_dict[Keys.TOTAL_LOSS]
-        if np.isinf(loss.item()) or np.isnan(loss.item()):
+        bad_flag = torch.tensor(
+            1.0 if np.isinf(loss.item()) or np.isnan(loss.item()) else 0.0,
+            device=DeviceManager.output_device)
+        if DeviceManager.is_distributed:
+            dist.all_reduce(bad_flag, op=dist.ReduceOp.MAX)
+        if bad_flag.item() > 0.5:
             LogManager.info('loss is nan')
             continue
         scaler.scale(loss).backward()
@@ -90,7 +96,8 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
         del ret_dict
         del loss
     scheduler.step()
-    LogManager.info('\tMean training loss: {:.10f}.'.format(np.mean(loss_value)))
+    if DeviceManager.is_main_process() and loss_value:
+        LogManager.info('\tMean training loss: {:.10f}.'.format(np.mean(loss_value)))
     return loss_value
 
 def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
@@ -113,6 +120,8 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
         float: WER(词错误率)百分比,如 25.43 表示 25.43%。
     """
     model.eval()
+    if not DeviceManager.is_main_process():
+        return 100.0
     total_sent = []
     total_info = []
     max_eval_frames = get_feeder_arg(cfg, "max_eval_frames")
@@ -158,8 +167,8 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
                        evaluate_dir=cfg.dataset_info['evaluation_dir'],
                        evaluate_prefix=cfg.dataset_info['evaluation_prefix'],
                        output_dir="epoch_{}_result/".format(epoch))
-    except:
-        LogManager.error(f"Unexpected error: {sys.exc_info()[0]}")
+    except Exception as e:
+        LogManager.error(f"Unexpected error during evaluation: {e}")
         ret = "Percent Total Error       =  100.00%   (ERROR)"
         return float(ret.split("=")[1].split("%")[0])
     finally:

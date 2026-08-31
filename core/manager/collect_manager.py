@@ -1,101 +1,143 @@
 # -*- encoding: utf-8 -*-
 """OpenCSLR 数据收集管理器模块。
 
-提供批次数据整理(collate)功能，负责对视频数据进行填充(padding)并以统一格式
-组织批次数据，确保数据长度对齐以满足模型输入要求。
+提供 DataLoader 的批次整理功能，负责对变长视频或时序特征进行 padding，
+并生成模型所需的长度与标签张量。
 """
-from itertools import chain
 import numpy as np
 import torch
 
 
 class CollectManager:
-    """数据收集管理器。
+    """管理批次整理配置并提供兼容的 ``collate`` 入口。"""
 
-    管理卷积核大小配置，并提供批次数据整理函数 collate_fn，
-    用于 DataLoader 中对视频序列进行填充和长度对齐。
-    """
-    # 定义类变量用于存储卷积核大小配置
     KERNEL_SIZES = None
 
     @classmethod
-    def init( cls, args ):
-        """初始化收集管理器，设置卷积核大小配置。
+    def init(cls, args):
+        """从参数对象初始化时序层配置。"""
+        try:
+            kernel_sizes = args.model_args["kernel_size"]
+        except (AttributeError, KeyError, TypeError) as exc:
+            raise ValueError("model_args.kernel_size is required for batch collation") from exc
+        cls.set_kernel_sizes(kernel_sizes)
 
-        Args:
-            args: 参数对象，包含 model_args.kernel_size 配置
-        """
-        cls.KERNEL_SIZES = args.model_args["kernel_size"]
+    @classmethod
+    def _normalize_kernel_sizes(cls, kernel_sizes):
+        """校验并复制 ``Kx``/``Px`` 格式的时序层配置。"""
+        if kernel_sizes is None:
+            raise ValueError("kernel_size must be configured before collating a batch")
+        normalized = []
+        for index, spec in enumerate(kernel_sizes):
+            if not isinstance(spec, str) or len(spec) < 2 or spec[0] not in ("K", "P"):
+                raise ValueError(
+                    f"kernel_size[{index}] must use 'K<number>' or 'P<number>', got {spec!r}"
+                )
+            try:
+                size = int(spec[1:])
+            except ValueError as exc:
+                raise ValueError(f"kernel_size[{index}] has invalid size: {spec!r}") from exc
+            if size <= 0:
+                raise ValueError(f"kernel_size[{index}] must be positive, got {spec!r}")
+            normalized.append(f"{spec[0]}{size}")
+        return normalized
 
-    @staticmethod
-    def collate ( batch ) :
-        """整理批次数据，对视频序列进行填充和对齐。
-
-        根据卷积核大小计算左右填充量，对视频帧序列进行填充以对齐长度，
-        同时对标签也进行展平处理。支持视频数据和预提取特征两种数据类型。
-
-        Args:
-            batch: 批次数据列表，每个元素为 (video, label, info) 三元组
-
-        Returns:
-            tuple: (padded_video, video_length, padded_label, label_length, info)
-                其中 padded_video 为填充后的视频张量，video_length 为各视频原始长度，
-                padded_label 为展平后的标签序列，label_length 为各标签序列长度
-        """
-        batch = [ item for item in sorted ( batch , key = lambda x : len ( x [ 0 ] ) , reverse = True ) ]
-        video , label , info = list ( zip ( *batch ) )
-
+    @classmethod
+    def _padding_params(cls):
+        """计算 raw video 所需的左 padding 和总 stride。"""
         left_pad = 0
         last_stride = 1
         total_stride = 1
-        for layer_idx , ks in enumerate ( CollectManager.KERNEL_SIZES ) :
-            if ks [ 0 ] == 'K' :
-                left_pad = left_pad * last_stride
-                left_pad += int ( (int ( ks [ 1 ] ) - 1) / 2 )
-            elif ks [ 0 ] == 'P' :
-                last_stride = int ( ks [ 1 ] )
-                total_stride = total_stride * last_stride
-        if len ( video [ 0 ].shape ) > 3 :
-            max_len = len ( video [ 0 ] )
-            video_length = torch.LongTensor (
-                [ np.ceil ( len ( vid ) / total_stride ) * total_stride + 2 * left_pad for vid in video ] )
-            right_pad = int ( np.ceil ( max_len / total_stride ) ) * total_stride - max_len + left_pad
-            max_len = max_len + left_pad + right_pad
-            padded_video = [ torch.cat (
-                (
-                    vid [ 0 ] [ None ].expand ( left_pad , -1 , -1 , -1 ) ,
-                    vid ,
-                    vid [ -1 ] [ None ].expand ( max_len - len ( vid ) - left_pad , -1 , -1 , -1 ) ,
-                )
-                , dim = 0 )
-                for vid in video ]
-            padded_video = torch.stack ( padded_video )
-        else :
-            max_len = len ( video [ 0 ] )
-            video_length = torch.LongTensor ( [ len ( vid ) for vid in video ] )
-            padded_video = [ torch.cat (
-                (
-                    vid ,
-                    vid [ -1 ] [ None ].expand ( max_len - len ( vid ) , -1 ) ,
-                )
-                , dim = 0 )
-                for vid in video ]
-            padded_video = torch.stack ( padded_video ).permute ( 0 , 2 , 1 )
-        label_length = torch.LongTensor ( [ len ( lab ) for lab in label ] )
-        if max ( label_length ) == 0 :
-            return padded_video , video_length , [ ] , [ ] , info
-        else :
-            padded_label = [ ]
-            for lab in label :
-                padded_label.extend ( lab )
-            padded_label = torch.LongTensor ( padded_label )
-            return padded_video , video_length , padded_label , label_length , info
+        for spec in cls._normalize_kernel_sizes(cls.KERNEL_SIZES):
+            operator, size = spec[0], int(spec[1:])
+            if operator == "K":
+                left_pad = left_pad * last_stride + (size - 1) // 2
+            else:
+                last_stride = size
+                total_stride *= size
+        return left_pad, total_stride
+
+    @staticmethod
+    def _as_tensor(value, name):
+        """将 numpy 输入转换为 Tensor，并提供统一错误信息。"""
+        if isinstance(value, torch.Tensor):
+            return value
+        if isinstance(value, np.ndarray):
+            return torch.as_tensor(value)
+        raise TypeError(f"{name} must be a torch.Tensor or numpy.ndarray, got {type(value).__name__}")
+
+    @classmethod
+    def _collate_video(cls, videos):
+        """整理 ``(T,C,H,W)`` raw video，并复制边界帧完成 padding。"""
+        left_pad, total_stride = cls._padding_params()
+        max_len = len(videos[0])
+        video_length = torch.LongTensor([
+            int(np.ceil(len(video) / total_stride) * total_stride + 2 * left_pad)
+            for video in videos
+        ])
+        right_pad = int(np.ceil(max_len / total_stride)) * total_stride - max_len + left_pad
+        padded_len = max_len + left_pad + right_pad
+        padded = []
+        for video in videos:
+            padded.append(torch.cat((
+                video[0][None].expand(left_pad, -1, -1, -1),
+                video,
+                video[-1][None].expand(padded_len - len(video) - left_pad, -1, -1, -1),
+            ), dim=0))
+        return torch.stack(padded), video_length
+
+    @staticmethod
+    def _collate_features(videos):
+        """整理 ``(T,D)`` 时序特征，不应用 raw video 的时序 padding 规则。"""
+        max_len = len(videos[0])
+        video_length = torch.LongTensor([len(video) for video in videos])
+        padded = [torch.cat((
+            video,
+            video[-1][None].expand(max_len - len(video), -1),
+        ), dim=0) for video in videos]
+        return torch.stack(padded).permute(0, 2, 1), video_length
+
+    @staticmethod
+    def _collate_labels(labels):
+        """展平标签，并始终返回稳定的 LongTensor 类型。"""
+        label_length = torch.LongTensor([len(label) for label in labels])
+        label_tensors = [torch.as_tensor(label, dtype=torch.long).reshape(-1) for label in labels]
+        padded_label = torch.cat(label_tensors) if label_tensors else torch.empty(0, dtype=torch.long)
+        return padded_label, label_length
+
+    @classmethod
+    def collate(cls, batch):
+        """整理一个变长 batch，返回兼容的五元组。
+
+        Returns:
+            tuple: ``(padded_video, video_length, padded_label, label_length, info)``。
+                raw video 输出为 ``(B,T,C,H,W)``，特征输出为 ``(B,C,T)``；
+                ``video_length`` 表示模型时间轴上的有效长度。
+        """
+        if not batch:
+            raise ValueError("cannot collate an empty batch")
+        if any(not isinstance(item, (tuple, list)) or len(item) != 3 for item in batch):
+            raise ValueError("each batch item must be a (video, label, info) tuple")
+
+        batch = sorted(batch, key=lambda item: len(item[0]), reverse=True)
+        videos, labels, info = zip(*batch)
+        videos = [cls._as_tensor(video, "video") for video in videos]
+        if any(video.ndim != videos[0].ndim for video in videos):
+            raise ValueError("all videos in a batch must have the same number of dimensions")
+        if any(len(video) == 0 for video in videos):
+            raise ValueError("videos must contain at least one time step")
+        if videos[0].ndim == 4:
+            padded_video, video_length = cls._collate_video(videos)
+        elif videos[0].ndim == 2:
+            padded_video, video_length = cls._collate_features(videos)
+        else:
+            raise ValueError(
+                f"unsupported video shape {tuple(videos[0].shape)}; expected (T,C,H,W) or (T,D)"
+            )
+        padded_label, label_length = cls._collate_labels(labels)
+        return padded_video, video_length, padded_label, label_length, info
 
     @classmethod
     def set_kernel_sizes(cls, kernel_sizes):
-        """设置卷积核大小配置。
-
-        Args:
-            kernel_sizes: 卷积核大小列表，包含 'K'（卷积）和 'P'（池化）配置
-        """
-        cls.KERNEL_SIZES = kernel_sizes
+        """设置并复制 ``Kx``/``Px`` 格式的卷积核配置。"""
+        cls.KERNEL_SIZES = cls._normalize_kernel_sizes(kernel_sizes)

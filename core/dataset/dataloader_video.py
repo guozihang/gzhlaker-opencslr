@@ -38,11 +38,30 @@ class VideoDataset(data.Dataset):
         skip_fileids: File IDs to skip (string, list, or dict per mode).
         skip_indices: Sample indices to skip (string, list, or dict per mode).
         skip_info_path: Path to a file listing file IDs to skip.
+        preprocess_root: Root directory holding '{dataset}/{mode}_info.npy' files.
+        memmap_root: Root directory holding the per-dataset memmap bigarray
+            folders (required when datatype is 'memmap').
+        feature_root: Root directory holding '{mode}/{fileid}_features.npy'
+            pre-extracted feature files.
+        image_feature_dir: Directory of full-frame images, relative to prefix.
     """
+
+    # Per-dataset memmap layout: dataset -> (sub-directory under memmap_root,
+    # info pickle file name template, memmap file name template). Templates may
+    # contain a '{mode}' placeholder.
+    MEMMAP_LAYOUT = {
+        "phoenix2014": ("ph_bigarray", "phoenix2014-{mode}.pickle", "phoenix2014-bigarray-map-{mode}"),
+        "phoenix2014-normal": ("ph_bigarray", "phoenix2014-{mode}.pickle", "phoenix2014-bigarray-map-{mode}"),
+        "phoenix2014-T": ("pht_bigarray", "phoenix2014-T-{mode}.pickle", "phoenix2014-T-bigarray-map-{mode}"),
+        "CSL-Daily": ("csldaily_bigarray", "csldaily.pickle", "csldaily"),
+    }
+    MEMMAP_FRAME_SHAPE = (256, 256, 3)
 
     def __init__(self, prefix, gloss_dict, dataset='phoenix2014', drop_ratio=1, num_gloss=-1, mode="train", transform_mode=True,
                  datatype="lmdb", frame_interval=1, image_scale=1.0, allowable_vid_length=16,
-                 skip_fileids=None, skip_indices=None, skip_info_path=None):
+                 skip_fileids=None, skip_indices=None, skip_info_path=None,
+                 preprocess_root="./preprocess", memmap_root=None, feature_root="./features",
+                 image_feature_dir="features/fullFrame-256x256px"):
         self.mode = mode
         self.ng = num_gloss
         self.prefix = prefix
@@ -52,13 +71,17 @@ class VideoDataset(data.Dataset):
         self.allowable_vid_length = allowable_vid_length
         self.frame_interval = frame_interval # not implemented for read_features()
         self.image_scale = image_scale # not implemented for read_features()
-        self.feat_prefix = f"{prefix}/features/fullFrame-256x256px/{mode}"
+        self.preprocess_root = preprocess_root
+        self.memmap_root = memmap_root
+        self.feature_root = feature_root
+        self.image_feature_dir = image_feature_dir
+        self.feat_prefix = os.path.join(prefix, image_feature_dir, mode)
         self.transform_mode = "train" if transform_mode else "test"
         skip_fileids = self.select_mode_value(skip_fileids, mode)
         skip_indices = self.select_mode_value(skip_indices, mode)
         skip_info_path = self.select_mode_value(skip_info_path, mode)
         self.inputs_list, self.input_indices = self.load_inputs_list(
-            dataset, mode, skip_fileids, skip_indices, skip_info_path
+            dataset, mode, preprocess_root, skip_fileids, skip_indices, skip_info_path
         )
         print(mode, len(self))
         self.data_aug = self.transform()
@@ -132,12 +155,14 @@ class VideoDataset(data.Dataset):
         return isinstance(item, dict) and "fileid" in item
 
     @classmethod
-    def load_inputs_list(cls, dataset, mode, skip_fileids=None, skip_indices=None, skip_info_path=None):
+    def load_inputs_list(cls, dataset, mode, preprocess_root="./preprocess",
+                         skip_fileids=None, skip_indices=None, skip_info_path=None):
         """Load and filter the list of input samples.
 
         Args:
             dataset: Dataset name.
             mode: Dataset split ('train', 'dev', 'test').
+            preprocess_root: Root directory holding per-dataset info files.
             skip_fileids: File IDs to skip.
             skip_indices: Sample indices to skip.
             skip_info_path: Path to a file with file IDs to skip.
@@ -145,7 +170,8 @@ class VideoDataset(data.Dataset):
         Returns:
             Tuple of (filtered_inputs_list, filtered_indices_list).
         """
-        raw_inputs = np.load(f"./preprocess/{dataset}/{mode}_info.npy", allow_pickle=True).item()
+        info_path = os.path.join(preprocess_root, dataset, f"{mode}_info.npy")
+        raw_inputs = np.load(info_path, allow_pickle=True).item()
         if isinstance(raw_inputs, dict):
             indexed_inputs = sorted(
                 [(int(idx), item) for idx, item in raw_inputs.items() if cls.is_sample_item(idx, item)],
@@ -215,37 +241,32 @@ class VideoDataset(data.Dataset):
         """Initialize memory-mapped numpy arrays for video data.
 
         Loads pre-computed pickle info files and opens the corresponding
-        memmap files for the current dataset and mode.
+        memmap files for the current dataset and mode. File locations are
+        derived from ``memmap_root`` and the per-dataset ``MEMMAP_LAYOUT``.
+
+        Raises:
+            ValueError: If ``memmap_root`` is not configured or the dataset
+                has no known memmap layout.
         """
-        if self.dataset == 'phoenix2014' or self.dataset == 'phoenix2014-normal':
-            with open ( f"/sda/data/guozihang/sign_dataset/ph_bigarray/phoenix2014-{self.mode}.pickle" , mode = "rb" ) as f :
-                self.info = pickle.load ( f )
-            T = self.info [ -1 ] [ 'end' ]
-            self.info = {i [ "path" ].split ( "/" ) [ -1 ] : [ i [ "start" ] , i [ "end" ] ] for i in self.info}
-            self.mem = np.memmap (
-                f"/sda/data/guozihang/sign_dataset/ph_bigarray/phoenix2014-bigarray-map-{self.mode}" ,
-                mode = "r" ,
-                shape = (T , 256 , 256 , 3) )
-        elif self.dataset == 'phoenix2014-T' :
-            with open (
-                    f"/sda/data/guozihang/sign_dataset/pht_bigarray/phoenix2014-T-{self.mode}.pickle" ,
-                    mode = "rb" ) as f :
-                self.info = pickle.load ( f )
-            T = self.info [ -1 ] [ 'end' ]
-            self.info = {i [ "path" ].split ( "/" ) [ -1 ] : [ i [ "start" ] , i [ "end" ] ] for i in self.info}
-            self.mem = np.memmap (
-                f"/sda/data/guozihang/sign_dataset/pht_bigarray/phoenix2014-T-bigarray-map-{self.mode}" ,
-                mode = "r" ,
-                shape = (T , 256 , 256 , 3) )
-        elif self.dataset == "CSL-Daily" :
-            with open ( f"/sda/data/guozihang/sign_dataset/csldaily_bigarray/csldaily.pickle" , mode = "rb" ) as f :
-                self.info = pickle.load ( f )
-            T = self.info [ -1 ] [ 'end' ]
-            self.info = {i [ "path" ].split ( "/" ) [ -1 ] : [ i [ "start" ] , i [ "end" ] ] for i in self.info}
-            self.mem = np.memmap (
-                f"/sda/data/guozihang/sign_dataset/csldaily_bigarray/csldaily" ,
-                mode = "r" ,
-                shape = (T , 256 , 256 , 3) )
+        if self.memmap_root is None:
+            raise ValueError(
+                f"'memmap_root' is not configured for dataset '{self.dataset}'. "
+                f"Set 'memmap_root' in configs/{self.dataset}.yaml."
+            )
+        if self.dataset not in self.MEMMAP_LAYOUT:
+            raise ValueError(
+                f"No memmap layout registered for dataset '{self.dataset}'. "
+                f"Known datasets: {sorted(self.MEMMAP_LAYOUT)}."
+            )
+        subdir, pickle_name, memmap_name = self.MEMMAP_LAYOUT[self.dataset]
+        layout_dir = os.path.join(self.memmap_root, subdir)
+        pickle_path = os.path.join(layout_dir, pickle_name.format(mode=self.mode))
+        memmap_path = os.path.join(layout_dir, memmap_name.format(mode=self.mode))
+        with open(pickle_path, mode="rb") as f:
+            self.info = pickle.load(f)
+        T = self.info[-1]['end']
+        self.info = {i["path"].split("/")[-1]: [i["start"], i["end"]] for i in self.info}
+        self.mem = np.memmap(memmap_path, mode="r", shape=(T, *self.MEMMAP_FRAME_SHAPE))
 
     def read_memmap(self, index):
         """Read a sample from a memory-mapped array.
@@ -278,7 +299,8 @@ class VideoDataset(data.Dataset):
             Tuple of (image_list, label_list, file_info_dict).
         """
         fi = self.inputs_list[index]
-        img_folder = os.path.join(self.prefix, "features/fullFrame-256x256px/" + fi['folder']) if 'phoenix' in self.dataset else os.path.join(self.prefix, "features/fullFrame-256x256px/" + fi['folder'] + "/*.jpg")
+        base_folder = os.path.join(self.prefix, self.image_feature_dir, fi['folder'])
+        img_folder = base_folder if 'phoenix' in self.dataset else os.path.join(base_folder, "*.jpg")
         img_list = sorted(glob.glob(img_folder))
 
         img_list = img_list[int(torch.randint(0, self.frame_interval, [1]))::self.frame_interval]
@@ -300,7 +322,8 @@ class VideoDataset(data.Dataset):
             Tuple of (features, labels).
         """
         fi = self.inputs_list[index]
-        data = np.load(f"./features/{self.mode}/{fi['fileid']}_features.npy", allow_pickle=True).item()
+        feature_path = os.path.join(self.feature_root, self.mode, f"{fi['fileid']}_features.npy")
+        data = np.load(feature_path, allow_pickle=True).item()
         return data['features'], data['label']
 
     def normalize(self, video, label, file_id=None):

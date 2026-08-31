@@ -1,8 +1,8 @@
 """OpenCSLR 训练与推理入口。
 
-按照初始化链依次初始化各个管理器模块（Argument -> Config -> Log -> Dataset
--> Collect -> Module -> Dataloader -> Device -> Experiment），然后启动训练
-或测试流程。
+按照初始化链依次初始化各个管理器模块（Argument -> Config -> Device -> Log
+-> Dataset -> Collect -> Module -> Dataloader -> Experiment），然后启动训练
+或测试流程。支持通过 torchrun 启动分布式训练。
 """
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -23,19 +23,19 @@ from manager.collect_manager import CollectManager
 def init():
     """初始化所有管理器模块。
 
-    按固定顺序依次初始化：ArgumentManager -> ConfigManager -> LogManager
-    -> DatasetManager -> CollectManager -> ModuleManager -> DataloaderManager
-    -> DeviceManager -> ExperimentManager。
+    按固定顺序依次初始化：ArgumentManager -> ConfigManager -> DeviceManager
+    -> LogManager -> DatasetManager -> CollectManager -> ModuleManager
+    -> DataloaderManager -> ExperimentManager。
     """
     ArgumentManager.init( )
     ConfigManager.init()
     ArgumentManager.map( ConfigManager.get( ) )
+    DeviceManager.init ( ArgumentManager.get ( "device" ) )
     LogManager.init()
     DatasetManager.init()
     CollectManager.init( ArgumentManager.get( ) )
     ModuleManager.init ( )
     DataloaderManager.init()
-    DeviceManager.init ( ArgumentManager.get ( "device" ) )
     ExperimentManager.init( ArgumentManager.get( ) )
 
 
@@ -45,6 +45,8 @@ def run():
     通过 ExperimentManager 运行指定配置的训练、验证和测试。
     """
     ExperimentManager.run()
+    DeviceManager.barrier()
+    DeviceManager.cleanup()
 
 def infer(video, video_length):
     """对输入视频进行推理。

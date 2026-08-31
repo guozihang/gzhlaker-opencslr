@@ -12,8 +12,7 @@ import torch.optim as optim
 from .argument_manager import ArgumentManager
 from .log_manager import LogManager
 from .dataset_manager import DatasetManager
-from .collect_manager import CollectManager
-from libs.sync_batchnorm import convert_model
+from .device_manager import DeviceManager
 
 class ModuleManager:
     """
@@ -45,13 +44,12 @@ class ModuleManager:
         """
         arg = ArgumentManager.get ( )
         build_function = cls.load( arg.model )
-        ModuleManager.MODEL_OBJECT= build_function (
+        ModuleManager.MODEL_OBJECT = build_function (
             arg.model_args ,
             gloss_dict = DatasetManager.get_gloss_dict ( ) ,
             loss_weights = arg.loss_weights ,
         )
-        # ModuleManager.MODEL_OBJECT = convert_model ( ModuleManager.MODEL_OBJECT )
-        ModuleManager.MODEL_OBJECT.to("cuda")
+        ModuleManager.MODEL_OBJECT = ModuleManager.MODEL_OBJECT.to(DeviceManager.output_device)
 
     @classmethod
     def init_optimizer_object(cls, optimizer_type="Adam"):
@@ -70,7 +68,7 @@ class ModuleManager:
         arg = ArgumentManager.get( ).optimizer_args
         if arg [ "optimizer" ] == 'SGD' :
             cls.OPTIMIZER_OBJECT = optim.SGD (
-                cls.MODEL_OBJECT ,
+                cls.MODEL_OBJECT.parameters() ,
                 lr = arg [ 'base_lr' ] ,
                 momentum = 0.9 ,
                 nesterov = arg [ 'nesterov' ] ,
@@ -110,8 +108,9 @@ class ModuleManager:
         Extracts the model name from the configuration and logs the model
         structure using LogManager.
         """
-        model_name = ArgumentManager.get( "model" ).split ( "." )[-2 ]
-        LogManager.info_panel( cls.MODEL_OBJECT , title= f"{model_name}" )
+        if DeviceManager.is_main_process():
+            model_name = ArgumentManager.get( "model" ).split ( "." )[-2 ]
+            LogManager.info_panel( cls.MODEL_OBJECT , title= f"{model_name}" )
 
     @classmethod
     def get(cls, module_name=None):

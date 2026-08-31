@@ -1,62 +1,95 @@
-"""OpenCSLR 设备管理器模块。
-
-负责 GPU 设备的配置与管理，包括设备选择、CUDA 可见设备设置、
-以及将数据张量迁移到指定设备的功能。
-"""
+"""OpenCSLR 设备与分布式运行时管理。"""
 
 import os
 
+import numpy as np
 import torch
+import torch.distributed as dist
 
 
-class DeviceManager(object):
-    """设备管理器。
+class DeviceManager:
+    """管理设备、torchrun 进程组及递归的数据迁移。"""
 
-    管理 GPU 设备的初始化与数据迁移操作，支持多 GPU 配置，
-    并提供将张量自动迁移到指定设备的工具方法。
-    """
+    gpu_list = []
+    output_device = torch.device("cpu")
+    rank = 0
+    local_rank = 0
+    world_size = 1
+    is_distributed = False
+
     @classmethod
-    def init(cls, device):
-        """初始化设备管理器，配置 GPU 设备。
+    def init(cls, device=None):
+        """根据 torchrun 环境初始化当前进程设备和进程组。"""
+        cls.rank = int(os.environ.get("RANK", "0"))
+        cls.local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        cls.world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        cls.is_distributed = cls.world_size > 1
 
-        设置 CUDA 可见设备列表，并确定输出设备。
-        支持单个 GPU 和多个 GPU 的配置。
+        requested = "None" if device is None else str(device).strip()
+        use_cpu = requested.lower() in {"none", "cpu", ""} or not torch.cuda.is_available()
+        if use_cpu:
+            if cls.is_distributed and not dist.is_initialized():
+                dist.init_process_group(
+                    backend=os.environ.get("DIST_BACKEND", "gloo"),
+                    init_method="env://",
+                    rank=cls.rank,
+                    world_size=cls.world_size,
+                )
+            cls.gpu_list = []
+            cls.output_device = torch.device("cpu")
+            return
 
-        Args:
-            device: 设备 ID 字符串，如 "0"、"0,1" 或 "None"
-        """
-        device = str ( device )
-        if device != 'None' :
-            cls.gpu_list = [ i for i in range ( len ( device.split ( ',' ) ) ) ]
-            os.environ [ "CUDA_VISIBLE_DEVICES" ] = device
-            output_device = cls.gpu_list [ 0 ]
-        cls.output_device = output_device if len ( cls.gpu_list ) > 0 else "cpu"
+        if cls.is_distributed:
+            if cls.local_rank >= torch.cuda.device_count():
+                raise ValueError(f"LOCAL_RANK {cls.local_rank} exceeds available CUDA devices")
+            torch.cuda.set_device(cls.local_rank)
+            if not dist.is_initialized():
+                dist.init_process_group(
+                    backend=os.environ.get("DIST_BACKEND", "nccl"),
+                    init_method="env://",
+                    rank=cls.rank,
+                    world_size=cls.world_size,
+                )
+            cls.gpu_list = [cls.local_rank]
+            cls.output_device = torch.device("cuda", cls.local_rank)
+            return
+
+        device_ids = [item.strip() for item in requested.split(",") if item.strip()]
+        if any(not item.isdigit() for item in device_ids):
+            raise ValueError(f"Invalid CUDA device specification: {device!r}")
+        if any(int(item) >= torch.cuda.device_count() for item in device_ids):
+            raise ValueError(f"CUDA device {device!r} is unavailable")
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(device_ids)
+        cls.gpu_list = list(range(len(device_ids)))
+        cls.output_device = torch.device("cuda:0")
+        torch.cuda.set_device(0)
+
+    @classmethod
+    def is_main_process(cls):
+        return cls.rank == 0
+
+    @classmethod
+    def barrier(cls):
+        if cls.is_distributed and dist.is_initialized():
+            dist.barrier()
+
+    @classmethod
+    def cleanup(cls):
+        if cls.is_distributed and dist.is_initialized():
+            dist.destroy_process_group()
 
     @classmethod
     def to(cls, data):
-        """将数据张量迁移到指定设备。
-
-        支持 FloatTensor、DoubleTensor、ByteTensor、LongTensor 以及
-        列表/元组等数据类型的自动迁移。
-
-        Args:
-            data: 输入数据，支持张量或张量列表/元组
-
-        Returns:
-            迁移到指定设备后的数据
-
-        Raises:
-            ValueError: 当数据类型不支持时抛出
-        """
-        if isinstance(data, torch.FloatTensor):
-            return data.to(cls.output_device)
-        elif isinstance(data, torch.DoubleTensor):
-            return data.float().to(cls.output_device)
-        elif isinstance(data, torch.ByteTensor):
-            return data.long().to(cls.output_device)
-        elif isinstance(data, torch.LongTensor):
-            return data.to(cls.output_device)
-        elif isinstance(data, list) or isinstance(data, tuple):
-            return [cls.to(d) for d in data]
-        else:
-            raise ValueError(data.shape, "Unknown Dtype: {}".format(data.dtype))
+        """将 Tensor、NumPy 数组或嵌套序列迁移到当前设备。"""
+        if isinstance(data, np.ndarray):
+            data = torch.as_tensor(data)
+        if isinstance(data, torch.Tensor):
+            if data.dtype == torch.float64:
+                data = data.float()
+            elif data.dtype == torch.uint8:
+                data = data.long()
+            return data.to(cls.output_device, non_blocking=True)
+        if isinstance(data, (list, tuple)):
+            converted = [cls.to(item) for item in data]
+            return converted if isinstance(data, list) else tuple(converted)
+        raise TypeError(f"Unsupported data type: {type(data).__name__}")

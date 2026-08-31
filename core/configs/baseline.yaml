@@ -68,11 +68,6 @@ model_args:
 #model_args:
 #  num_classes: 1296
 #  c2d_type: resnet18
-#  kernel_size: ['K5', "P2", 'K5', "P2"]
+#  kernel_size: ['K5', "P2", 'K5', "P2']
 #  stride: [ 4 , 0 ]
 #  use_bn: 1
-
-wandb:
-  enable : true
-  project : "openslr"
-  entity : "gzhlaker"
