@@ -15,7 +15,7 @@ import sys
 import torch
 import torch.distributed as dist
 import numpy as np
-from libs.slr_eval.wer_calculation import evaluate
+from libs.slr_eval.evaluation_manager import evaluate
 from torch.cuda.amp import autocast as autocast
 from torch.cuda.amp import GradScaler
 from tqdm import tqdm

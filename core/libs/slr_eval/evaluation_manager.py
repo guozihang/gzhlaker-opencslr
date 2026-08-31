@@ -1,36 +1,62 @@
-"""WER 评估工具:基于仓库内置的 pysclite(纯 Python 移植版 sclite)。
+"""WER 评估管理器:基于仓库内置 pysclite(纯 Python 移植版 sclite)的评估流程。
 
-原实现依赖编译安装的 sclite 二进制(``./software/sclite``)。现改为:
-  1. 数据清洗(preprocess.sh)与 [EMPTY] 补齐(mergectmstm.py)流程保持不变;
-  2. 对齐与统计在进程内直接调用 ``libs.pysclite``,无需任何编译依赖;
-  3. 报告输出 sum / rsum / pra 与 sclite 对应;原 sgml / dtl 报告
-     pysclite 不支持,已移除,WER 数值改由 SCORES 统计直接计算。
+由原 wer_calculation.py(evaluate 入口)与 mergectmstm.py([EMPTY] 补齐)
+合并而成,无任何编译依赖。流程:
+  1. preprocess.sh 清洗假设 CTM(去特殊标签、合并重复词);
+  2. ground-truth STM(evaluate_dir/groundtruth/)按句 ID 排序(等价 sort -k1,1);
+  3. merge_ctm_stm 为缺失句补齐 [EMPTY] 行;
+  4. pysclite 对齐 CTM 与 STM,输出 sum/rsum/pra 报告并计算 WER。
 """
 
 import os
 import shutil
 import subprocess
-import sys
 
 from libs.pysclite import scores as _sc
 from libs.pysclite import stmctm as _stmctm
+
+
+def merge_ctm_stm(ctm_file, stm_file):
+    """为 CTM 中缺失的句补齐 [EMPTY] 行(原 mergectmstm.py 逻辑)。
+
+    按 STM 中的句 ID 顺序遍历:CTM 中该 ID 对应的行缺失时插入
+    "{id} 1 0.000 0.030 [EMPTY]",使每条参考句都有假设行,保证对齐
+    覆盖全部数据。原地改写 ctm_file。
+
+    Args:
+        ctm_file: 假设 CTM 文件路径(按句 ID 分组、组内按起始时间排序)。
+        stm_file: 按句 ID 排序的参考 STM 文件路径。
+    """
+    with open(ctm_file, "r", encoding="utf-8") as f:
+        ctm_dict = [line.strip().split() for line in f]
+    with open(stm_file, "r", encoding="utf-8") as f:
+        stm_dict = [line.strip().split() for line in f]
+
+    added_lines = 0
+    for idx, stm_line in enumerate(stm_dict):
+        # ctm and stm match:跳过该句 ID 的全部 CTM 行
+        if (len(ctm_dict) > idx + added_lines
+                and ctm_dict[idx + added_lines][0] == stm_line[0]):
+            while (len(ctm_dict) > idx + added_lines + 1
+                   and ctm_dict[idx + added_lines + 1][0] == stm_line[0]):
+                added_lines += 1
+        else:
+            ctm_dict.insert(idx + added_lines,
+                            [stm_line[0], "1 0.000 0.030 [EMPTY]"])
+
+    with open(ctm_file, "w", encoding="utf-8") as f:
+        for line in ctm_dict:
+            f.write(" ".join(line) + "\n")
 
 
 def evaluate(prefix="./", mode="dev", evaluate_dir=None, evaluate_prefix=None,
              output_file=None, output_dir=None):
     """计算指定模式(dev/test)的 WER。
 
-    流程:
-      1. preprocess.sh 清洗假设 CTM(去特殊标签、合并重复词);
-      2. ground-truth STM(evaluate_dir/groundtruth/)按句 ID 排序(等价 sort -k1,1);
-      3. mergectmstm.py 为缺失句补齐 [EMPTY] 行;
-      4. pysclite 对齐 CTM 与 STM,输出 sum/rsum/pra 报告并计算 WER。
-
     Args:
         prefix: 输出路径前缀(通常是 work_dir,以 / 结尾)。
         mode: 评估模式("dev"/"test"),用于选择 ground-truth 文件。
-        evaluate_dir: slr_eval 工具目录(含 preprocess.sh、mergectmstm.py 与
-            groundtruth/ 子目录)。
+        evaluate_dir: slr_eval 工具目录(含 preprocess.sh 与 groundtruth/ 子目录)。
         evaluate_prefix: ground-truth 文件名前缀(如 "phoenix2014-groundtruth"),
             对应 groundtruth/ 下的 {prefix}-{mode}.stm 文件。
         output_file: 模型输出的假设 CTM 文件名。
@@ -51,7 +77,7 @@ def evaluate(prefix="./", mode="dev", evaluate_dir=None, evaluate_prefix=None,
                            "{}-{}.stm".format(evaluate_prefix, mode))
     tmp_stm = prefix + "tmp.stm"
 
-    # 1. 清洗假设 CTM(与 sclite 版流程一致)
+    # 1. 清洗假设 CTM
     subprocess.check_call(
         ["bash", os.path.join(evaluate_dir, "preprocess.sh"), hyp_file, tmp_ctm, tmp2_ctm])
 
@@ -62,9 +88,8 @@ def evaluate(prefix="./", mode="dev", evaluate_dir=None, evaluate_prefix=None,
     with open(tmp_stm, "wb") as f:
         f.writelines(lines)
 
-    # 3. 为缺失句补齐 [EMPTY] 行(mergectmstm.py 原地改写 tmp2.ctm)
-    subprocess.check_call(
-        [sys.executable, os.path.join(evaluate_dir, "mergectmstm.py"), tmp2_ctm, tmp_stm])
+    # 3. 为缺失句补齐 [EMPTY] 行(原地改写 tmp2.ctm)
+    merge_ctm_stm(tmp2_ctm, tmp_stm)
 
     out_ctm = prefix + "out." + output_file
     shutil.copyfile(tmp2_ctm, out_ctm)
