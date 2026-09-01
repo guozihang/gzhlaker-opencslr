@@ -12,6 +12,8 @@
 
 from torch.nn.functional import conv1d
 
+from models.registry import register_model
+
 from models.base import Container, SignLanguageModel
 from models.modules import ResNet, TemporalConv1D, BiLSTM, Classifier, Decoder, TLPLoss, VACLoss, VACTemporalConv1D
 from models.modules.CorrNet_TemporalConv1D import CorrNeT_TemporalConv1D
@@ -30,6 +32,7 @@ from models.modules.slowfast.Decoder import SlowFast_Decoder
 import torch.nn as nn
 
 
+@register_model('tlp')
 def build_tlp(args, gloss_dict, loss_weights):
     """构建 TLP (Temporal Lift Pooling) 模型。
 
@@ -59,6 +62,7 @@ def build_tlp(args, gloss_dict, loss_weights):
     return model
 
 
+@register_model('sen')
 def build_sen(args, gloss_dict, loss_weights):
     """构建 SEN (Stochastic Encoding Network) 模型。
 
@@ -87,6 +91,7 @@ def build_sen(args, gloss_dict, loss_weights):
     )
 
 
+@register_model('vac')
 def build_vac(args, gloss_dict, loss_weights):
     """构建 VAC (Visual Alignment Constraint) 模型。
 
@@ -123,6 +128,7 @@ def build_vac(args, gloss_dict, loss_weights):
     return model
 
 
+@register_model('slowfast')
 def build_slowfast(args, gloss_dict, loss_weights):
     """构建 SlowFast 模型。
 
@@ -157,6 +163,7 @@ def build_slowfast(args, gloss_dict, loss_weights):
     )
 
 
+@register_model('corrnet')
 def build_corrnet(args, gloss_dict, loss_weights):
     """构建 CorrNet (Correlation Network) 模型。
 

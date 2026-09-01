@@ -110,7 +110,9 @@ class ModuleManager:
         structure using LogManager.
         """
         if DeviceManager.is_main_process():
-            model_name = ArgumentManager.get( "model" ).split ( "." )[-2 ]
+            model_ref = ArgumentManager.get( "model" )
+            # 注册名(如 "slowfast")直接作为标题;完全限定路径取模块名
+            model_name = model_ref.split ( "." )[-2 ] if "." in model_ref else model_ref
             LogManager.info_panel( cls.MODEL_OBJECT , title= f"{model_name}" )
 
     @classmethod
@@ -158,14 +160,23 @@ class ModuleManager:
 
     @classmethod
     def load(cls, name):
-        """Dynamically import a module and return the specified attribute.
+        """按注册名或完全限定路径获取模型构建函数。
+
+        优先查询模型注册表(models.registry,由 build_function 的
+        @register_model 装饰器填充);注册名未命中时回退到按
+        "module.path.attr" 形式的动态导入,兼容旧配置。
 
         Args:
-            name: Fully qualified name, e.g. "models.build_function.build_slowfast"
+            name: 注册名(如 "slowfast")或完全限定路径(如
+                "models.build_function.build_slowfast")
 
         Returns:
             The imported attribute (typically a function or class)
         """
+        import models.build_function  # 确保注册表已填充
+        from models.registry import MODEL_BUILDERS
+        if name in MODEL_BUILDERS:
+            return MODEL_BUILDERS[name]
         components = name.rsplit ( '.' , 1 )
         mod = importlib.import_module ( components [ -2 ] )
         mod = getattr ( mod , components [ -1 ] )

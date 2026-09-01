@@ -2,7 +2,7 @@
 # exp.yaml 中各实验通过 network: <name> 引用对应网络。
 
 slowfast:
-  model: models.build_function.build_slowfast
+  model: slowfast
   decode_mode: beam
   model_args:
     num_classes: 1296
@@ -25,7 +25,7 @@ slowfast:
     Fast: 1.0
 
 tlp:
-  model: models.build_function.build_tlp
+  model: tlp
   decode_mode: beam
   model_args:
     num_classes: 1
@@ -41,7 +41,7 @@ tlp:
     Cp: 0.001
 
 vac:
-  model: models.build_function.build_vac
+  model: vac
   decode_mode: beam
   model_args:
     num_classes: 1296
