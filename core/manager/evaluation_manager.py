@@ -181,7 +181,10 @@ class EvaluationManager:
             lines = f.read().splitlines(keepends=True)
         lines.sort(key=lambda l: (l.split(None, 1)[0] if l.split(None, 1) else b"", l))
         with open(tmp_stm, "wb") as f:
-            f.writelines(lines)
+            for line in lines:
+                if not line.endswith(b"\n"):
+                    line += b"\n"
+                f.write(line)
 
         # 3. 为缺失句补齐 [EMPTY] 行(原地改写 tmp2.ctm)
         cls.merge_ctm_stm(tmp2_ctm, tmp_stm)

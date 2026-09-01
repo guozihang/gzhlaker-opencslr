@@ -26,7 +26,7 @@ class DeviceManager:
         cls.is_distributed = cls.world_size > 1
 
         requested = "None" if device is None else str(device).strip()
-        use_cpu = requested.lower() in {"none", "cpu", ""} or not torch.cuda.is_available()
+        use_cpu = requested.lower() in {"none", "cpu", ""}
         if use_cpu:
             if cls.is_distributed and not dist.is_initialized():
                 dist.init_process_group(
@@ -57,9 +57,15 @@ class DeviceManager:
         device_ids = [item.strip() for item in requested.split(",") if item.strip()]
         if any(not item.isdigit() for item in device_ids):
             raise ValueError(f"Invalid CUDA device specification: {device!r}")
-        if any(int(item) >= torch.cuda.device_count() for item in device_ids):
-            raise ValueError(f"CUDA device {device!r} is unavailable")
+        # 必须在任何 torch.cuda.* 调用之前设置 CUDA_VISIBLE_DEVICES，
+        # 否则 CUDA runtime 会按旧环境变量初始化，设备选择不会生效。
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(device_ids)
+        if not torch.cuda.is_available():
+            cls.gpu_list = []
+            cls.output_device = torch.device("cpu")
+            return
+        if torch.cuda.device_count() < len(device_ids):
+            raise ValueError(f"CUDA device {device!r} is unavailable")
         cls.gpu_list = list(range(len(device_ids)))
         cls.output_device = torch.device("cuda:0")
         torch.cuda.set_device(0)

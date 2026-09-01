@@ -278,6 +278,17 @@ class ArgumentManager:
                 merged[name] = value
         return merged
 
+def json_dict(v):
+    """将 JSON 字符串解析为字典。
+
+    Args:
+        v: JSON 格式字符串
+
+    Returns:
+        dict: 解析后的字典
+    """
+    return json.loads(v)
+
 def str2bool(v):
     """将字符串转换为布尔值。
 

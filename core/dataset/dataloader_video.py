@@ -44,6 +44,8 @@ class VideoDataset(data.Dataset):
         feature_root: Root directory holding '{mode}/{fileid}_features.npy'
             pre-extracted feature files.
         image_feature_dir: Directory of full-frame images, relative to prefix.
+        limit_len: If set, cap the dataset length to this many samples
+            (for quick pipeline smoke tests).
     """
 
     # Per-dataset memmap layout: dataset -> (sub-directory under memmap_root,
@@ -61,7 +63,7 @@ class VideoDataset(data.Dataset):
                  datatype="lmdb", frame_interval=1, image_scale=1.0, allowable_vid_length=16,
                  skip_fileids=None, skip_indices=None, skip_info_path=None,
                  preprocess_root="./preprocess", memmap_root=None, feature_root="./features",
-                 image_feature_dir="features/fullFrame-256x256px"):
+                 image_feature_dir="features/fullFrame-256x256px", limit_len=None):
         self.mode = mode
         self.ng = num_gloss
         self.prefix = prefix
@@ -76,6 +78,7 @@ class VideoDataset(data.Dataset):
         self.feature_root = feature_root
         self.image_feature_dir = image_feature_dir
         self.feat_prefix = os.path.join(prefix, image_feature_dir, mode)
+        self.limit_len = limit_len
         self.transform_mode = "train" if transform_mode else "test"
         skip_fileids = self.select_mode_value(skip_fileids, mode)
         skip_indices = self.select_mode_value(skip_indices, mode)
@@ -368,7 +371,8 @@ class VideoDataset(data.Dataset):
         """Return the total number of samples.
 
         Returns:
-            Number of samples in the dataset.
+            Number of samples in the dataset (capped by limit_len if set).
         """
-        #return 100
+        if self.limit_len is not None:
+            return min(len(self.inputs_list), self.limit_len)
         return len(self.inputs_list)

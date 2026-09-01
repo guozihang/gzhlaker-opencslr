@@ -44,6 +44,7 @@ class ModuleManager:
         """
         arg = ArgumentManager.get ( )
         build_function = cls.load( arg.model )
+        arg.model_args[ 'decode_mode' ] = arg.decode_mode
         ModuleManager.MODEL_OBJECT = build_function (
             arg.model_args ,
             gloss_dict = DatasetManager.get_gloss_dict ( ) ,

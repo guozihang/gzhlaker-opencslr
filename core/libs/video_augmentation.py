@@ -224,6 +224,7 @@ class RandomCrop(object):
         else:
             raise TypeError('Expected numpy.ndarray or PIL.Image' +
                             'but got list of {0}'.format(type(clip[0])))
+        crop_h, crop_w = self.size
         if crop_w > im_w:
             pad = crop_w - im_w
             clip = [np.pad(img, ((0, 0), (pad // 2, pad - pad // 2), (0, 0)), 'constant', constant_values=0) for img in

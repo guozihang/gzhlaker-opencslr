@@ -28,7 +28,7 @@ class SlowFast_Decoder:
 
     def __init__(self, args, gloss_dict):
         super(SlowFast_Decoder, self).__init__()
-        self.decoder = Decode(gloss_dict, args["num_classes"], 'beam')
+        self.decoder = Decode(gloss_dict, args["num_classes"], args.get("decode_mode", "beam"))
 
     def __call__(self, data):
         """执行解码。
@@ -138,10 +138,11 @@ class Decode(object):
             list: 解码后的词汇序列列表
         """
         index_list = torch.argmax(nn_output, axis=2)
+        vid_lgt = vid_lgt.cpu()
         batchsize, lgt = index_list.shape
         ret_list = []
         for batch_idx in range(batchsize):
-            group_result = [x[0] for x in groupby(index_list[batch_idx][:vid_lgt[batch_idx]])]
+            group_result = [x[0] for x in groupby(index_list[batch_idx][:int(vid_lgt[batch_idx])])]
             filtered = [*filter(lambda x: x != self.blank_id, group_result)]
             if len(filtered) > 0:
                 max_result = torch.stack(filtered)

@@ -7,8 +7,6 @@ import torch
 from torch import nn
 import torch
 import torch.nn.functional as F
-from wandb.util import downsample
-from whisper import aggregate
 import torch.utils.model_zoo as model_zoo
 from ..modules.identity import Identity
 from ..keys import Keys, require
