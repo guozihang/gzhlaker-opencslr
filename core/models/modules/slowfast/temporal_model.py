@@ -40,27 +40,28 @@ class temporal_model(nn.Module):
         share_classifier = args.get("share_classifier", None)
         self.num_classes = args.get("num_classes", None)
         self.hidden_size = args.get("hidden_size", None)
-        self.conv1d = conv1d
+        # 用 object.__setattr__ 持有 conv1d 引用,避免同一模块被重复注册到 state_dict
+        object.__setattr__(self, '_conv1d', conv1d)
         if weight_norm:
             self.classifier = nn.ModuleList([NormLinear(self.hidden_size, self.num_classes) for i in range(3)])
-            if self.conv1d is not None:
-                self.conv1d.conv1d.fc = nn.ModuleList(
+            if self._conv1d is not None:
+                self._conv1d.conv1d.fc = nn.ModuleList(
                     [NormLinear(self.hidden_size, self.num_classes) for i in range(3)]
                 )
         else:
             self.classifier = nn.ModuleList([nn.Linear(self.hidden_size, self.num_classes) for i in range(3)])
-            if self.conv1d is not None:
-                self.conv1d.conv1d.fc = nn.ModuleList(
+            if self._conv1d is not None:
+                self._conv1d.conv1d.fc = nn.ModuleList(
                     [nn.Linear(self.hidden_size, self.num_classes) for i in range(3)]
                 )
         if share_classifier == 1:
-            if self.conv1d is not None:
-                self.conv1d.conv1d.fc = self.classifier
+            if self._conv1d is not None:
+                self._conv1d.conv1d.fc = self.classifier
         elif share_classifier == 2:
             classifier = self.classifier[0]
             self.classifier = nn.ModuleList([classifier for i in range(3)])
-            if self.conv1d is not None:
-                self.conv1d.conv1d.fc = nn.ModuleList([classifier for i in range(3)])
+            if self._conv1d is not None:
+                self._conv1d.conv1d.fc = nn.ModuleList([classifier for i in range(3)])
 
     def forward(self, data):
 

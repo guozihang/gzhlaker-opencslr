@@ -20,8 +20,6 @@ from models.modules.corrnet_resnet import corrnet_resnet18
 from models.modules.norm import NormLinear
 from models.senmodules.senresnet import SENresnet
 from models.senmodules.SENLoss import SENLoss
-from models.senmodules.sen_TemporalConv import sen_TemporalConv
-from models.senmodules.sen_Decoder import sen_Decoder
 
 from models.modules.slowfast.SlowFast import SlowFast
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D
@@ -71,21 +69,21 @@ def build_sen(args, gloss_dict, loss_weights):
 
     Returns:
         SignLanguageModel 实例,空间模块为 SENresnet,时序模块为
-        sen_TemporalConv + BiLSTM + Classifier,损失为 SENLoss。
+        TemporalConv1D + BiLSTM + Classifier,损失为 SENLoss。
     """
     return SignLanguageModel(
         spatial_module_container=Container([
             SENresnet(args)
         ]),
         temporal_module_container=Container([
-            sen_TemporalConv(args),
+            TemporalConv1D(args),
             BiLSTM(args),
             Classifier(args)
         ]),
         loss_module_container=Container([
             SENLoss(loss_weights)
         ]),
-        decoder=sen_Decoder(args, gloss_dict)
+        decoder=Decoder(args, gloss_dict)
     )
 
 

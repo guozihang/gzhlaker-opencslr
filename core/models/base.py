@@ -73,6 +73,13 @@ class SignLanguageModel(nn.Module):
         self.temporal_module_container = temporal_module_container
         self.loss_module_container = loss_module_container
         self.decoder = decoder
+        self.register_backward_hook(self.backward_hook)
+
+    def backward_hook(self, module, grad_input, grad_output):
+        """反向传播钩子,将梯度中的 NaN 置 0,防止 NaN 传播。"""
+        for g in grad_input:
+            if g is not None:
+                g[g != g] = 0
 
     def forward(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """按顺序执行四个容器,各容器原地更新 data 字典。
