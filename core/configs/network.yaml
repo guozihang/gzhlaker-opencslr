@@ -1,6 +1,11 @@
 # 网络相关配置,按网络名分节。
 # exp.yaml 中各实验通过 network: <name> 引用对应网络。
 
+_common_ctc_loss: &common_ctc_loss
+  SeqCTC: 1.0
+  ConvCTC: 1.0
+  Dist: 25.0
+
 slowfast:
   model: slowfast
   decode_mode: beam
@@ -16,9 +21,7 @@ slowfast:
     weight_norm: True
     slowfast_config: SLOWFAST_64x2_R101_50_50.yaml
   loss_weights:
-    ConvCTC: 1.0
-    SeqCTC: 1.0
-    Dist: 25.0
+    <<: *common_ctc_loss
     Cu: 0.001
     Cp: 0.001
     Slow: 1.0
@@ -34,9 +37,7 @@ tlp:
     stride: [4, 0]
     use_bn: 1
   loss_weights:
-    ConvCTC: 1.0
-    SeqCTC: 1.0
-    Dist: 25.0
+    <<: *common_ctc_loss
     Cu: 0.001
     Cp: 0.001
 
@@ -50,6 +51,17 @@ vac:
     stride: [4, 0]
     use_bn: 1
   loss_weights:
-    ConvCTC: 1.0
-    SeqCTC: 1.0
-    Dist: 25.0
+    <<: *common_ctc_loss
+
+corrnet:
+  model: corrnet
+  decode_mode: beam
+  model_args:
+    num_classes: 1296
+    c2d_type: resnet18
+    conv_type: 2
+    use_bn: 1
+    share_classifier: True
+    weight_norm: True
+  loss_weights:
+    <<: *common_ctc_loss
