@@ -191,6 +191,7 @@ class TemporalConv(nn.Module):
         loss_LiftPool_u = 0
         loss_LiftPool_p = 0
         i = 0
+        visual_feat = frame_feat
         for tempconv in self.temporal_conv:
             if isinstance(tempconv, Temporal_LiftPool):
                 visual_feat, loss_u, loss_d = tempconv(visual_feat) #self.strides[i])
@@ -280,6 +281,7 @@ class VACTemporalConv(nn.Module):
         Returns:
             dict: 包含视觉特征、卷积 logits 和特征长度
         """
+        visual_feat = self.temporal_conv(frame_feat)
         lgt = self.update_lgt(lgt)
         logits = None if self.num_classes == -1 \
             else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)

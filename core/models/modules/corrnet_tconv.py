@@ -162,6 +162,7 @@ class TemporalConv(nn.Module):
         Returns:
             dict: 包含视觉特征、卷积 logits 和特征长度
         """
+        visual_feat = self.temporal_conv(frame_feat)
         lgt = self.update_lgt(lgt)
         logits = None if self.num_classes == -1 \
             else self.fc(visual_feat.transpose(1, 2)).transpose(1, 2)

@@ -29,14 +29,6 @@ _corrnet_optimizer_args: &corrnet_optimizer_args
   start_epoch: 0
   nesterov: False
 
-_corrnet_feeder_args: &corrnet_feeder_args
-  mode: 'train'
-  datatype: 'video'
-  num_gloss: -1
-  drop_ratio: 1.0
-  frame_interval: 1
-  image_scale: 1.0
-
 _common_experiment: &common_experiment
   feeder: dataset.dataloader_video.VideoDataset
   phase: train
@@ -93,4 +85,3 @@ corrnet:
   device: 0,1
   log_interval: 10000
   optimizer_args: *corrnet_optimizer_args
-  feeder_args: *corrnet_feeder_args
