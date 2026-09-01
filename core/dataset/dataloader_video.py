@@ -44,26 +44,21 @@ class VideoDataset(data.Dataset):
         feature_root: Root directory holding '{mode}/{fileid}_features.npy'
             pre-extracted feature files.
         image_feature_dir: Directory of full-frame images, relative to prefix.
+        memmap_layout: Dict describing the per-dataset memmap layout
+            (subdir/pickle_name/memmap_name, name templates may contain
+            '{mode}'), provided by configs/dataset.yaml via dataset_info.
+        memmap_frame_shape: Shape of a single frame in the memmap bigarray,
+            provided by configs/dataset.yaml.
         limit_len: If set, cap the dataset length to this many samples
             (for quick pipeline smoke tests).
     """
-
-    # Per-dataset memmap layout: dataset -> (sub-directory under memmap_root,
-    # info pickle file name template, memmap file name template). Templates may
-    # contain a '{mode}' placeholder.
-    MEMMAP_LAYOUT = {
-        "phoenix2014": ("ph_bigarray", "phoenix2014-{mode}.pickle", "phoenix2014-bigarray-map-{mode}"),
-        "phoenix2014-normal": ("ph_bigarray", "phoenix2014-{mode}.pickle", "phoenix2014-bigarray-map-{mode}"),
-        "phoenix2014-T": ("pht_bigarray", "phoenix2014-T-{mode}.pickle", "phoenix2014-T-bigarray-map-{mode}"),
-        "CSL-Daily": ("csldaily_bigarray", "csldaily.pickle", "csldaily"),
-    }
-    MEMMAP_FRAME_SHAPE = (256, 256, 3)
 
     def __init__(self, prefix, gloss_dict, dataset='phoenix2014', drop_ratio=1, num_gloss=-1, mode="train", transform_mode=True,
                  datatype="lmdb", frame_interval=1, image_scale=1.0, allowable_vid_length=16,
                  skip_fileids=None, skip_indices=None, skip_info_path=None,
                  preprocess_root="./preprocess", memmap_root=None, feature_root="./features",
-                 image_feature_dir="features/fullFrame-256x256px", limit_len=None):
+                 image_feature_dir="features/fullFrame-256x256px", limit_len=None,
+                 memmap_layout=None, memmap_frame_shape=(256, 256, 3)):
         self.mode = mode
         self.ng = num_gloss
         self.prefix = prefix
@@ -77,6 +72,8 @@ class VideoDataset(data.Dataset):
         self.memmap_root = memmap_root
         self.feature_root = feature_root
         self.image_feature_dir = image_feature_dir
+        self.memmap_layout = memmap_layout
+        self.memmap_frame_shape = tuple(memmap_frame_shape) if memmap_frame_shape is not None else None
         self.feat_prefix = os.path.join(prefix, image_feature_dir, mode)
         self.limit_len = limit_len
         self.transform_mode = "train" if transform_mode else "test"
@@ -245,23 +242,30 @@ class VideoDataset(data.Dataset):
 
         Loads pre-computed pickle info files and opens the corresponding
         memmap files for the current dataset and mode. File locations are
-        derived from ``memmap_root`` and the per-dataset ``MEMMAP_LAYOUT``.
+        derived from ``memmap_root`` and the per-dataset ``memmap_layout``
+        (both provided by configs/dataset.yaml via dataset_info).
 
         Raises:
-            ValueError: If ``memmap_root`` is not configured or the dataset
-                has no known memmap layout.
+            ValueError: If ``memmap_root`` / ``memmap_layout`` /
+                ``memmap_frame_shape`` is not configured.
         """
         if self.memmap_root is None:
             raise ValueError(
                 f"'memmap_root' is not configured for dataset '{self.dataset}'. "
-                f"Set 'memmap_root' in configs/{self.dataset}.yaml."
+                f"Set memmap_root in configs/dataset.yaml."
             )
-        if self.dataset not in self.MEMMAP_LAYOUT:
+        if self.memmap_layout is None:
             raise ValueError(
-                f"No memmap layout registered for dataset '{self.dataset}'. "
-                f"Known datasets: {sorted(self.MEMMAP_LAYOUT)}."
+                f"'memmap_layout' is not configured for dataset '{self.dataset}'. "
+                f"Set memmap_layout in configs/dataset.yaml."
             )
-        subdir, pickle_name, memmap_name = self.MEMMAP_LAYOUT[self.dataset]
+        if self.memmap_frame_shape is None:
+            raise ValueError(
+                f"'memmap_frame_shape' is not configured for dataset '{self.dataset}'. "
+                f"Set memmap_frame_shape in configs/dataset.yaml."
+            )
+        layout = self.memmap_layout
+        subdir, pickle_name, memmap_name = layout["subdir"], layout["pickle_name"], layout["memmap_name"]
         layout_dir = os.path.join(self.memmap_root, subdir)
         pickle_path = os.path.join(layout_dir, pickle_name.format(mode=self.mode))
         memmap_path = os.path.join(layout_dir, memmap_name.format(mode=self.mode))
@@ -269,7 +273,7 @@ class VideoDataset(data.Dataset):
             self.info = pickle.load(f)
         T = self.info[-1]['end']
         self.info = {i["path"].split("/")[-1]: [i["start"], i["end"]] for i in self.info}
-        self.mem = np.memmap(memmap_path, mode="r", shape=(T, *self.MEMMAP_FRAME_SHAPE))
+        self.mem = np.memmap(memmap_path, mode="r", shape=(T, *self.memmap_frame_shape))
 
     def read_memmap(self, index):
         """Read a sample from a memory-mapped array.

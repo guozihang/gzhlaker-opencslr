@@ -249,9 +249,17 @@ class ArgumentManager:
         if not dataset:
             raise ValueError("dataset must be configured before loading dataset metadata")
         config_dir = os.path.dirname(os.path.abspath(cls.get("config")))
-        dataset_config_path = os.path.join(config_dir, f"{dataset}.yaml")
+        dataset_config_path = os.path.join(config_dir, "dataset.yaml")
         with open(dataset_config_path, "r", encoding="utf-8") as reader:
-            dataset_info = yaml.safe_load(reader) or {}
+            all_dataset_info = yaml.safe_load(reader) or {}
+        if not isinstance(all_dataset_info, dict):
+            raise TypeError("dataset config must be a mapping of dataset name -> config")
+        dataset_info = all_dataset_info.get(dataset)
+        if dataset_info is None:
+            raise ValueError(
+                f"Unknown dataset {dataset!r}: not found in {dataset_config_path}. "
+                f"Available: {sorted(all_dataset_info)}."
+            )
         if not isinstance(dataset_info, dict):
             raise TypeError("dataset config must be a mapping")
         cls.ARGS.dataset_info = cls._deep_merge(cls.ARGS.dataset_info, dataset_info)

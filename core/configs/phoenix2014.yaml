@@ -1,6 +1,0 @@
-dataset_root: ./dataset/phoenix2014/phoenix-2014-multisigner
-dict_path: ./preprocess/phoenix2014/gloss_dict.npy
-preprocess_root: ./preprocess
-memmap_root: /sda/data/guozihang/sign_dataset
-evaluation_dir: ./libs/slr_eval
-evaluation_prefix: phoenix2014-groundtruth

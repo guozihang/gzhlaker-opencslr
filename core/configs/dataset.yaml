@@ -1,0 +1,48 @@
+# 所有数据集的配置统一放在本文件,按数据集名分节。
+# 运行时由 --dataset 指定数据集名,ArgumentManager 从对应节加载 dataset_info。
+
+phoenix2014:
+  dataset_root: ./dataset/phoenix2014/phoenix-2014-multisigner
+  dict_path: ./preprocess/phoenix2014/gloss_dict.npy
+  preprocess_root: ./preprocess
+  memmap_root: /sda/data/guozihang/sign_dataset
+  memmap_layout:
+    subdir: ph_bigarray
+    pickle_name: "phoenix2014-{mode}.pickle"
+    memmap_name: "phoenix2014-bigarray-map-{mode}"
+  memmap_frame_shape: [256, 256, 3]
+  evaluation_dir: ./libs/slr_eval
+  evaluation_prefix: phoenix2014-groundtruth
+
+phoenix2014-T:
+  dataset_root: ./dataset/phoenix2014-T
+  dict_path: ./preprocess/phoenix2014-T/gloss_dict.npy
+  preprocess_root: ./preprocess
+  memmap_root: /sda/data/guozihang/sign_dataset
+  memmap_layout:
+    subdir: pht_bigarray
+    pickle_name: "phoenix2014-T-{mode}.pickle"
+    memmap_name: "phoenix2014-T-bigarray-map-{mode}"
+  memmap_frame_shape: [256, 256, 3]
+  evaluation_dir: ./libs/slr_eval
+  evaluation_prefix: phoenix2014-T-groundtruth
+
+CSL:
+  dataset_root: ./dataset/CSL
+  dict_path: ./preprocess/CSL/gloss_dict.npy
+  preprocess_root: ./preprocess
+  evaluation_dir: ./libs/slr_eval
+  evaluation_prefix: CSL-groundtruth
+
+CSL-Daily:
+  dataset_root: ./dataset/CSL-Daily
+  dict_path: ./preprocess/CSL-Daily/gloss_dict.npy
+  preprocess_root: ./preprocess
+  memmap_root: /sda/data/guozihang/sign_dataset
+  memmap_layout:
+    subdir: csldaily_bigarray
+    pickle_name: csldaily.pickle
+    memmap_name: csldaily
+  memmap_frame_shape: [256, 256, 3]
+  evaluation_dir: ./libs/slr_eval
+  evaluation_prefix: CSL-Daily-groundtruth
