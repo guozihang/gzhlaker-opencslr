@@ -1,0 +1,125 @@
+# 实验设置配置,按实验名分节。
+# 运行方式: python main.py --config configs/exp.yaml --exp <name>
+# 各实验通过 network: <name> 引用 network.yaml 中的网络配置。
+
+baseline:
+  network: slowfast
+  feeder: dataset.dataloader_video.VideoDataset
+  phase: train
+  dataset: phoenix2014
+  num_epoch: 80
+  work_dir: /share/huaiwen_group/work_dir/www2026_test_1/
+  batch_size: 2
+
+  wandb:
+    enable: true
+    project: "openslr"
+    entity: "gzhlaker"
+
+  random_seed: 0
+  test_batch_size: 2
+  num_worker: 8
+  device: 0,1,2
+  log_interval: 200
+  eval_interval: 1
+  save_interval: 5
+
+  optimizer_args:
+    optimizer: Adam
+    base_lr: 0.0001
+    step: [40, 60]
+    learning_ratio: 1
+    weight_decay: 0.0001
+    start_epoch: 0
+    nesterov: False
+
+  feeder_args:
+    mode: 'train'
+    datatype: 'memmap'
+    num_gloss: -1
+    drop_ratio: 1.0
+    frame_interval: 1
+    image_scale: 1.0
+    skip_fileids:
+      dev:
+        - S004264_P0007_T00
+      test:
+        - S002001_P0007_T00
+
+tlp:
+  network: tlp
+  feeder: dataset.dataloader_video.VideoDataset
+  phase: train
+  dataset: CSL-Daily
+  num_epoch: 80
+  work_dir: ./work_dir/tlp/
+  batch_size: 2
+
+  wandb:
+    enable: true
+    project: "openslr"
+    entity: "gzhlaker"
+
+  random_seed: 0
+  test_batch_size: 2
+  num_worker: 8
+  device: 0
+  log_interval: 200
+  eval_interval: 1
+  save_interval: 5
+
+  optimizer_args:
+    optimizer: Adam
+    base_lr: 0.0001
+    step: [40, 60]
+    learning_ratio: 1
+    weight_decay: 0.0001
+    start_epoch: 0
+    nesterov: False
+
+  feeder_args:
+    mode: 'train'
+    datatype: 'memmap'
+    num_gloss: -1
+    drop_ratio: 1.0
+    frame_interval: 1
+    image_scale: 1.0
+
+vac:
+  network: vac
+  feeder: dataset.dataloader_video.VideoDataset
+  phase: train
+  dataset: phoenix2014
+  num_epoch: 80
+  work_dir: ./work_dir/vac_smkd/
+  batch_size: 2
+
+  wandb:
+    enable: true
+    project: "openslr"
+    entity: "gzhlaker"
+
+  random_seed: 0
+  test_batch_size: 2
+  num_worker: 8
+  device: 0,1,2
+  log_interval: 200
+  eval_interval: 1
+  save_interval: 5
+
+  optimizer_args:
+    optimizer: Adam
+    base_lr: 0.0001
+    step: [40, 60]
+    learning_ratio: 1
+    weight_decay: 0.0001
+    start_epoch: 0
+    nesterov: False
+
+  feeder_args:
+    mode: 'train'
+    datatype: 'memmap'
+    num_gloss: -1
+    drop_ratio: 1.0
+    frame_interval: 1
+    image_scale: 1.0

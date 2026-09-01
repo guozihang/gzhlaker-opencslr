@@ -36,8 +36,12 @@ class ArgumentManager:
             help = 'the work folder for storing results' )
         parser.add_argument (
             '--config' ,
-            default = './configs/baseline.yaml' ,
-            help = 'path to the configuration file' )
+            default = './configs/exp.yaml' ,
+            help = 'path to the experiment configuration file' )
+        parser.add_argument (
+            '--exp' ,
+            default = 'baseline' ,
+            help = 'experiment name, a section in the exp config file' )
         parser.add_argument (
             '--random_fix' ,
             type = str2bool ,
