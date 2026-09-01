@@ -8,7 +8,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
-from ..modules.identity import Identity
+from .identity import Identity
 from ..keys import Keys, require
 
 model_urls={

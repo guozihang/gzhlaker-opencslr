@@ -18,8 +18,8 @@ from models.modules.CorrNet_TemporalConv1D import CorrNeT_TemporalConv1D
 from models.modules.corrnet_loss import CorrNetLoss
 from models.modules.corrnet_resnet import corrnet_resnet18
 from models.modules.norm import NormLinear
-from models.senmodules.senresnet import SENresnet
-from models.senmodules.SENLoss import SENLoss
+from models.modules.senresnet import SENresnet
+from models.modules.SENLoss import SENLoss
 
 from models.modules.slowfast.SlowFast import SlowFast
 from models.modules.slowfast.TemporalSlowFastConv1D import TemporalSlowFastConv1D

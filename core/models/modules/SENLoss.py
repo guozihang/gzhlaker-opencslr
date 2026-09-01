@@ -5,7 +5,7 @@
 """
 import torch
 from torch import nn
-from ..modules.criterions import SeqKD
+from .criterions import SeqKD
 from ..keys import Keys, require
 
 
