@@ -98,9 +98,11 @@ class ExperimentManager:
         Args:
             rng_dict: 包含各随机数生成器状态的字典
         """
-        torch.set_rng_state(rng_dict["torch"])
+        # 断点续训时 checkpoint 经 map_location=output_device 加载,rng 张量会被
+        # 迁到 GPU 上,而 torch.set_rng_state 只接受 CPU 的 ByteTensor,故显式 .cpu()。
+        torch.set_rng_state(rng_dict["torch"].cpu())
         if rng_dict.get("cuda") is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(rng_dict["cuda"])
+            torch.cuda.set_rng_state_all([s.cpu() for s in rng_dict["cuda"]])
         np.random.set_state(rng_dict["numpy"])
         random.setstate(rng_dict["random"])
 
