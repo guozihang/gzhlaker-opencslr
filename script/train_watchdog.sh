@@ -16,6 +16,9 @@
 
 set -u
 
+# 训练环境解释器(gzh_vac_standard_2),后台 shell 的 PATH 可能指向 base env。
+PYTHON="${OPENSLR_PYTHON:-/sda/home/guozihang/anaconda3/envs/gzh_vac_standard_2/bin/python}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$SCRIPT_DIR/../core"
 EXP="${1:?用法: train_watchdog.sh <exp> <work_dir> [额外 main.py 参数]}"
@@ -42,7 +45,7 @@ latest_ckpt() {
 FAILS=0
 while true; do
     LATEST=$(latest_ckpt)
-    CMD="python main.py --config configs/exp.yaml --exp $EXP --work-dir $WORK_DIR"
+    CMD="$PYTHON main.py --config configs/exp.yaml --exp $EXP --work-dir $WORK_DIR"
     if [ -n "$LATEST" ]; then
         CMD="$CMD --load-checkpoints $LATEST"
         echo "[$(date '+%F %T')] 续跑: checkpoint=$LATEST" | tee -a "$LOG"

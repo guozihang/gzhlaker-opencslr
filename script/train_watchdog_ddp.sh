@@ -17,8 +17,8 @@
 
 set -u
 
-# 训练环境解释器(gzh_slr_5),后台 shell 的 PATH 可能指向 base env。
-PYTHON="${OPENSLR_PYTHON:-/sda/home/guozihang/software/anaconda3/envs/gzh_slr_5/bin/python}"
+# 训练环境解释器(gzh_vac_standard_2),后台 shell 的 PATH 可能指向 base env。
+PYTHON="${OPENSLR_PYTHON:-/sda/home/guozihang/anaconda3/envs/gzh_vac_standard_2/bin/python}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$SCRIPT_DIR/../core"
