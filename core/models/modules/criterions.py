@@ -4,10 +4,10 @@ Provides sequence-level loss functions including knowledge distillation
 loss with label smoothing (SeqKD).
 """
 
-import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from models.keys import Keys, require
 
 
 class SeqKD(nn.Module):
@@ -51,3 +51,60 @@ class SeqKD(nn.Module):
         #     loss = torch.sum(torch.sum(loss, dim=1) * mask)
         return loss
 
+
+class CTCWithDistillationLoss(nn.Module):
+    """公共的 CTC + 序列蒸馏损失。
+
+    SEN、VAC 和 CorrNet 三个模型的损失结构完全一致，统一实现于此。
+    """
+
+    def __init__(self, loss_weights, blank_id=0, who="CTCWithDistillationLoss"):
+        super().__init__()
+        self.loss_weights = loss_weights
+        self.who = who
+        self.loss = {
+            "CTCLoss": torch.nn.CTCLoss(
+                blank=blank_id, reduction="none", zero_infinity=False
+            ),
+            "distillation": SeqKD(T=8),
+        }
+
+    def forward(self, data):
+        require(
+            data,
+            Keys.CONV_LOGITS,
+            Keys.SEQUENCE_LOGITS,
+            Keys.LABEL,
+            Keys.FEAT_LEN,
+            Keys.LABEL_LGT,
+            who=self.who,
+        )
+        loss = 0
+        total_loss = {}
+
+        for key, weight in self.loss_weights.items():
+            if key == "ConvCTC":
+                total_loss["ConvCTC"] = weight * self.loss["CTCLoss"](
+                    data[Keys.CONV_LOGITS].log_softmax(-1),
+                    data[Keys.LABEL].cpu().int(),
+                    data[Keys.FEAT_LEN].cpu().int(),
+                    data[Keys.LABEL_LGT].cpu().int(),
+                ).mean()
+                loss += total_loss["ConvCTC"]
+            elif key == "SeqCTC":
+                total_loss["SeqCTC"] = weight * self.loss["CTCLoss"](
+                    data[Keys.SEQUENCE_LOGITS].log_softmax(-1),
+                    data[Keys.LABEL].cpu().int(),
+                    data[Keys.FEAT_LEN].cpu().int(),
+                    data[Keys.LABEL_LGT].cpu().int(),
+                ).mean()
+                loss += total_loss["SeqCTC"]
+            elif key == "Dist":
+                total_loss["Dist"] = weight * self.loss["distillation"](
+                    data[Keys.CONV_LOGITS],
+                    data[Keys.SEQUENCE_LOGITS].detach(),
+                    use_blank=False,
+                )
+                loss += total_loss["Dist"]
+
+        return {Keys.LOSS: loss, Keys.TOTAL_LOSS: total_loss}

@@ -3,12 +3,9 @@
 提供多尺度时序卷积和标准时序卷积，用于 CorrNet 模型中的时序特征建模。
 """
 
-import pdb
 import copy
 import torch
-import collections
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class MultiScale_TemporalConv(nn.Module):

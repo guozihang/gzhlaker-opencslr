@@ -385,18 +385,6 @@ def corrnet_resnet18(args):
     return CorrNet_ResNet18(args)
 
 
-def corrnet_resnet18(args):
-    """CorrNet_ResNet18 的工厂函数（别名）。
-
-    Args:
-        args: 配置字典。
-
-    Returns:
-        CorrNet_ResNet18: 构建好的模型实例。
-    """
-    return CorrNet_ResNet18(args)
-
-
 def test():
     """测试 CorrNet_ResNet18 的前向传播。
 

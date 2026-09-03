@@ -4,7 +4,6 @@
 """
 
 import torch.nn as nn
-from .norm import NormLinear
 from models.keys import Keys, require
 
 

@@ -5,8 +5,6 @@ and Spatial Enhancement Module (SSEM) for video-based feature extraction.
 """
 import torch
 from torch import nn
-import torch
-import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 from .identity import Identity
 from ..keys import Keys, require
@@ -297,7 +295,6 @@ class SENresnet(nn.Module):
         return {
             Keys.FRAMEWISE_FEATURES: framewise,
         }
-
 
 
 

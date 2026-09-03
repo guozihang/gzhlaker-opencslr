@@ -1,10 +1,7 @@
 # modules/temporal_slowfast_fuse.py
-import pdb
 import copy
 import torch
-import collections
 import torch.nn as nn
-import torch.nn.functional as F
 from models.keys import Keys, require
 
 """Temporal SlowFast 1D Convolution module.
