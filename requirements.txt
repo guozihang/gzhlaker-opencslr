@@ -1,0 +1,50 @@
+# OpenCSLR training & inference dependencies
+# Derived from imports in core/ and the version constraints required by the code.
+# The full training environment is named gzh_vac_standard_2 on the lab server;
+# this file lists only direct dependencies with semantic version constraints.
+
+# ------------------------------------------------------------------------------
+# Core deep learning
+# ------------------------------------------------------------------------------
+torch>=1.8.0
+torchvision>=0.9.0
+
+# ------------------------------------------------------------------------------
+# Data / image / video
+# ------------------------------------------------------------------------------
+numpy
+opencv-python
+Pillow
+pandas
+
+# ------------------------------------------------------------------------------
+# Augmentation / visualization
+# ------------------------------------------------------------------------------
+# NOTE: core/libs/video_augmentation.py calls scipy.misc.imresize/imrotate,
+# which were removed in scipy 1.3.0. Keep scipy<1.3.0 if you exercise the
+# numpy-array code path in the video augmentation pipeline.
+scipy<1.3.0
+matplotlib
+
+# ------------------------------------------------------------------------------
+# Config / progress / logging / console
+# ------------------------------------------------------------------------------
+PyYAML
+tqdm
+loguru
+rich
+
+# ------------------------------------------------------------------------------
+# SlowFast config helper (CfgNode)
+# ------------------------------------------------------------------------------
+fvcore
+
+# ------------------------------------------------------------------------------
+# Optional: cloud upload helpers used by core/preprocess/generate_memmap.py
+# ------------------------------------------------------------------------------
+oss2
+
+# ------------------------------------------------------------------------------
+# Optional: experiment tracking (enabled via --wandb)
+# ------------------------------------------------------------------------------
+wandb

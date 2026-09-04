@@ -1,0 +1,63 @@
+# OpenCSLR full dependency snapshot
+# -----------------------------------------------------------------------------
+# NOTE: This is a *reconstructed* lockfile. The actual training environment
+# (gzh_vac_standard_2) lives on the lab server at
+# /sda/home/guozihang/anaconda3/envs/gzh_vac_standard_2 and is not reachable
+# from this local macOS session. The pins below are chosen to match the
+# Python 3.7 / PyTorch 1.8 era and the direct dependencies declared in
+# requirements.txt. Replace this file with a real `pip freeze --all` from the
+# training host whenever possible.
+# -----------------------------------------------------------------------------
+
+# --- Core deep learning ------------------------------------------------------
+torch==1.8.0
+torchvision==0.9.0
+
+# --- Data / image / video ----------------------------------------------------
+numpy==1.19.5
+opencv-python==4.5.1.48
+Pillow==8.1.0
+pandas==1.1.5
+
+# --- Augmentation / visualization --------------------------------------------
+# scipy<1.3.0 is required for scipy.misc.imresize/imrotate in
+# core/libs/video_augmentation.py.
+scipy==1.2.3
+matplotlib==3.3.4
+
+# --- Config / progress / logging / console -----------------------------------
+PyYAML==5.4.1
+tqdm==4.56.0
+loguru==0.5.3
+rich==9.13.0
+
+# --- SlowFast config helper --------------------------------------------------
+fvcore==0.1.3.post20210317
+
+# --- Optional cloud upload ---------------------------------------------------
+oss2==2.13.1
+
+# --- Optional experiment tracking --------------------------------------------
+wandb==0.10.21
+
+# --- Common transitive dependencies (PyTorch 1.8 / Python 3.7 ecosystem) ------
+certifi==2020.12.5
+chardet==4.0.0
+click==7.1.2
+cycler==0.10.0
+idna==2.10
+kiwisolver==1.3.1
+pathtools==0.1.2
+promise==2.3
+protobuf==3.14.0
+psutil==5.8.0
+pyparsing==2.4.7
+python-dateutil==2.8.1
+pytz==2021.1
+requests==2.25.1
+sentry-sdk==0.20.3
+shortuuid==1.0.1
+six==1.15.0
+subprocess32==3.5.4
+typing-extensions==3.7.4.3
+urllib3==1.26.3

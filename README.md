@@ -1,6 +1,6 @@
 OpenSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.7%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8%2B-red)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
@@ -43,19 +43,63 @@ OpenSLR/
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.7+ (Python 3.7 is recommended because `core/libs/video_augmentation.py` still uses `scipy.misc.imresize/imrotate`, which were removed in scipy 1.3.0)
 - PyTorch 1.8+
 - CUDA 10.2+ (for GPU acceleration)
 
-### Install Dependencies
+### 1. Clone the repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/immc-lab/OpenSLR.git
 cd OpenSLR
+```
 
-# Install dependencies
+### 2. Create a virtual environment (recommended)
+
+**Option A: conda**
+
+```bash
+conda env create -f environment.yml
+conda activate openslr
+```
+
+For CPU-only machines, edit `environment.yml` first and replace the PyTorch lines with:
+
+```yaml
+- pytorch>=1.8.0
+- torchvision>=0.9.0
+- cpuonly
+```
+
+**Option B: venv**
+
+```bash
+python3.7 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+```
+
+### 3. Install dependencies
+
+```bash
+# Direct dependencies (suitable for development / version flexibility)
 pip install -r requirements.txt
+
+# Or, for a more reproducible install, use the reconstructed full snapshot
+# (replace with a real `pip freeze --all` from the training host when available)
+pip install -r requirements-frozen.txt
+```
+
+If you install PyTorch manually, use the official command matching your CUDA version, e.g. for CUDA 10.2:
+
+```bash
+pip install torch==1.8.0 torchvision==0.9.0
+```
+
+### 4. Quick sanity check
+
+```bash
+cd core
+python main.py --config configs/exp.yaml --exp baseline --work-dir ./work_dir/smoke_test --num_epoch 1
 ```
 
 ## Quick Start
@@ -104,7 +148,7 @@ optimizer_args:
 
 ```bash
 cd core
-python main.py --config configs/baseline.yaml --work-dir ./work_dir/baseline_experiment
+python main.py --config configs/exp.yaml --exp baseline --work-dir ./work_dir/baseline_experiment
 ```
 
 ## Model Architectures
@@ -129,7 +173,7 @@ The framework provides comprehensive evaluation metrics:
 
 ```bash
 # Evaluate a trained model
-python main.py --config configs/baseline.yaml --phase test --load-weights ./work_dir/baseline_experiment/best_model.pt
+python main.py --config configs/exp.yaml --exp baseline --phase test --load-weights ./work_dir/baseline_experiment/best_model.pt
 ```
 
 
