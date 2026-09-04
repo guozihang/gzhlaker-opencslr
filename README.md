@@ -56,23 +56,6 @@ cd OpenSLR
 
 ### 2. Create a virtual environment (recommended)
 
-**Option A: conda**
-
-```bash
-conda env create -f environment.yml
-conda activate openslr
-```
-
-For CPU-only machines, edit `environment.yml` first and replace the PyTorch lines with:
-
-```yaml
-- pytorch>=1.8.0
-- torchvision>=0.9.0
-- cpuonly
-```
-
-**Option B: venv**
-
 ```bash
 python3.7 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
@@ -81,15 +64,10 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 ### 3. Install dependencies
 
 ```bash
-# Direct dependencies (suitable for development / version flexibility)
 pip install -r requirements.txt
-
-# Or, for a more reproducible install, use the reconstructed full snapshot
-# (replace with a real `pip freeze --all` from the training host when available)
-pip install -r requirements-frozen.txt
 ```
 
-If you install PyTorch manually, use the official command matching your CUDA version, e.g. for CUDA 10.2:
+If you prefer to install PyTorch manually, use the official command matching your CUDA version, e.g. for CUDA 10.2:
 
 ```bash
 pip install torch==1.8.0 torchvision==0.9.0
