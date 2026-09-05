@@ -106,6 +106,22 @@ class ArgumentManager:
             type = int ,
             default = 4 ,
             help = 'the number of worker for data loader' )
+        parser.add_argument('--eval-num-worker', type=int, default=0,
+                            help='number of workers for evaluation loaders')
+        parser.add_argument('--prefetch-factor', type=int, default=2,
+                            help='batches prefetched by each worker')
+        parser.add_argument('--persistent-workers', type=str2bool, default=True,
+                            help='keep training DataLoader workers alive between epochs')
+        parser.add_argument('--pin-memory', type=str2bool, default=True,
+                            help='pin host batches for asynchronous CUDA copies')
+        parser.add_argument('--worker-threads', type=int, default=1,
+                            help='number of torch/OpenCV threads per DataLoader worker')
+        parser.add_argument('--preopen-memmap', type=str2bool, default=True,
+                            help='open the training memmap before workers are forked')
+        parser.add_argument('--gpu-prefetch', type=str2bool, default=True,
+                            help='prefetch and transform batches on a CUDA stream')
+        parser.add_argument('--length-bucket-size', type=int, default=0,
+                            help='length bucket width in batches; 0 disables bucketing')
         parser.add_argument (
             '--feeder-args' ,
             type = json_dict,

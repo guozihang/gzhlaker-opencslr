@@ -15,6 +15,9 @@ from libs import video_augmentation
 import pickle
 sys.path.append("..")
 
+_MEMMAP_CACHE = {}
+_INPUTS_CACHE = {}
+
 
 class VideoDataset(data.Dataset):
     """Video dataset for continuous sign language recognition.
@@ -58,7 +61,9 @@ class VideoDataset(data.Dataset):
                  skip_fileids=None, skip_indices=None, skip_info_path=None,
                  preprocess_root="./preprocess", memmap_root=None, feature_root="./features",
                  image_feature_dir="features/fullFrame-256x256px", limit_len=None,
-                 memmap_layout=None, memmap_frame_shape=(256, 256, 3)):
+                 memmap_layout=None, memmap_frame_shape=(256, 256, 3),
+                 cache_file_lists=True, cache_features=True, precache_file_lists=False,
+                 gpu_augment=False):
         self.mode = mode
         self.ng = num_gloss
         self.prefix = prefix
@@ -76,6 +81,14 @@ class VideoDataset(data.Dataset):
         self.memmap_frame_shape = tuple(memmap_frame_shape) if memmap_frame_shape is not None else None
         self.feat_prefix = os.path.join(prefix, image_feature_dir, mode)
         self.limit_len = limit_len
+        self.cache_file_lists = bool(cache_file_lists)
+        self.cache_features = bool(cache_features)
+        # GPU augmentation is executed by CUDAPrefetcher after collation.  The
+        # dataset only changes its CPU transform pipeline here.
+        self.gpu_augment = bool(gpu_augment and torch.cuda.is_available())
+        self._file_list_cache = {}
+        self._feature_cache = {}
+        self._label_cache = {}
         self.transform_mode = "train" if transform_mode else "test"
         skip_fileids = self.select_mode_value(skip_fileids, mode)
         skip_indices = self.select_mode_value(skip_indices, mode)
@@ -85,6 +98,28 @@ class VideoDataset(data.Dataset):
         )
         print(mode, len(self))
         self.data_aug = self.transform()
+        if self.data_type == "video" and precache_file_lists:
+            self._precache_file_lists()
+
+    def _video_glob(self, fi):
+        base_folder = os.path.join(self.prefix, self.image_feature_dir, fi['folder'])
+        return base_folder if 'phoenix' in self.dataset else os.path.join(base_folder, "*.jpg")
+
+    def _precache_file_lists(self):
+        for fi in self.inputs_list:
+            pattern = self._video_glob(fi)
+            if pattern not in self._file_list_cache:
+                self._file_list_cache[pattern] = sorted(glob.glob(pattern))
+
+    def _labels(self, fi):
+        fileid = fi.get("fileid", fi.get("original_info", ""))
+        if fileid not in self._label_cache:
+            self._label_cache[fileid] = [
+                self.dict[phase][0]
+                for phase in fi.get("label", "").split()
+                if phase in self.dict
+            ]
+        return list(self._label_cache[fileid])
 
     @staticmethod
     def select_mode_value(value, mode):
@@ -171,14 +206,18 @@ class VideoDataset(data.Dataset):
             Tuple of (filtered_inputs_list, filtered_indices_list).
         """
         info_path = os.path.join(preprocess_root, dataset, f"{mode}_info.npy")
-        raw_inputs = np.load(info_path, allow_pickle=True).item()
-        if isinstance(raw_inputs, dict):
-            indexed_inputs = sorted(
-                [(int(idx), item) for idx, item in raw_inputs.items() if cls.is_sample_item(idx, item)],
-                key=lambda item: item[0]
-            )
-        else:
-            indexed_inputs = list(enumerate(raw_inputs))
+        cache_key = os.path.abspath(info_path)
+        indexed_inputs = _INPUTS_CACHE.get(cache_key)
+        if indexed_inputs is None:
+            raw_inputs = np.load(info_path, allow_pickle=True).item()
+            if isinstance(raw_inputs, dict):
+                indexed_inputs = sorted(
+                    [(int(idx), item) for idx, item in raw_inputs.items() if cls.is_sample_item(idx, item)],
+                    key=lambda item: item[0]
+                )
+            else:
+                indexed_inputs = list(enumerate(raw_inputs))
+            _INPUTS_CACHE[cache_key] = indexed_inputs
 
         skipped_fileids = {cls.normalize_fileid(item) for item in cls.parse_list(skip_fileids)}
         if skip_info_path:
@@ -228,7 +267,7 @@ class VideoDataset(data.Dataset):
             input_data, label = self.normalize(input_data, label)
             return input_data, torch.LongTensor(label), self.inputs_list[idx]['original_info']
         elif self.data_type == "memmap":
-            if hasattr ( self , 'mem' ) == False :
+            if not hasattr(self, 'mem'):
                 self.init_memmap ( )
             input_data , label , fi = self.read_memmap ( idx )
             input_data , label = self.normalize ( input_data , label )
@@ -249,6 +288,14 @@ class VideoDataset(data.Dataset):
             ValueError: If ``memmap_root`` / ``memmap_layout`` /
                 ``memmap_frame_shape`` is not configured.
         """
+        cache_key = (
+            self.dataset, self.mode, os.path.abspath(self.memmap_root or ""),
+            repr(self.memmap_layout), self.memmap_frame_shape,
+        )
+        cached = _MEMMAP_CACHE.get(cache_key)
+        if cached is not None:
+            self.info, self.mem = cached
+            return
         if self.memmap_root is None:
             raise ValueError(
                 f"'memmap_root' is not configured for dataset '{self.dataset}'. "
@@ -274,6 +321,7 @@ class VideoDataset(data.Dataset):
         T = self.info[-1]['end']
         self.info = {i["path"].split("/")[-1]: [i["start"], i["end"]] for i in self.info}
         self.mem = np.memmap(memmap_path, mode="r", shape=(T, *self.memmap_frame_shape))
+        _MEMMAP_CACHE[cache_key] = (self.info, self.mem)
 
     def read_memmap(self, index):
         """Read a sample from a memory-mapped array.
@@ -285,15 +333,8 @@ class VideoDataset(data.Dataset):
             Tuple of (image_list, label_list, file_info_dict).
         """
         fi = self.inputs_list [ index ]
-        label_list = [ ]
-        for phase in fi [ 'label' ].split ( " " ) :
-            if phase == '' :
-                continue
-            if phase in self.dict.keys ( ) :
-                label_list.append ( self.dict [ phase ] [ 0 ] )
+        label_list = self._labels(fi)
         images = self.mem [ self.info [ fi [ 'fileid' ] + ".npy" ] [ 0 ] :self.info [ fi [ 'fileid' ] + ".npy" ] [ 1 ] ]
-        images = np.split ( images , images.shape [ 0 ] , axis = 0 )
-        images = [ np.squeeze ( im , axis = 0 ) for im in images ]
         return images , label_list , fi
 
     def read_video(self, index):
@@ -306,18 +347,21 @@ class VideoDataset(data.Dataset):
             Tuple of (image_list, label_list, file_info_dict).
         """
         fi = self.inputs_list[index]
-        base_folder = os.path.join(self.prefix, self.image_feature_dir, fi['folder'])
-        img_folder = base_folder if 'phoenix' in self.dataset else os.path.join(base_folder, "*.jpg")
-        img_list = sorted(glob.glob(img_folder))
+        img_folder = self._video_glob(fi)
+        if self.cache_file_lists:
+            img_list = self._file_list_cache.get(img_folder)
+            if img_list is None:
+                img_list = sorted(glob.glob(img_folder))
+                self._file_list_cache[img_folder] = img_list
+        else:
+            img_list = sorted(glob.glob(img_folder))
 
         img_list = img_list[int(torch.randint(0, self.frame_interval, [1]))::self.frame_interval]
-        label_list = []
-        for phase in fi['label'].split(" "):
-            if phase == '':
-                continue
-            if phase in self.dict.keys():
-                label_list.append(self.dict[phase][0])
-        return [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in img_list], label_list, fi
+        label_list = self._labels(fi)
+        frames = [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in img_list]
+        if not frames:
+            raise RuntimeError(f"No frames found for video folder: {img_folder}")
+        return np.stack(frames, axis=0), label_list, fi
 
     def read_features(self, index):
         """Read a sample from pre-extracted feature files.
@@ -330,7 +374,11 @@ class VideoDataset(data.Dataset):
         """
         fi = self.inputs_list[index]
         feature_path = os.path.join(self.feature_root, self.mode, f"{fi['fileid']}_features.npy")
-        data = np.load(feature_path, allow_pickle=True).item()
+        data = self._feature_cache.get(feature_path) if self.cache_features else None
+        if data is None:
+            data = np.load(feature_path, allow_pickle=True).item()
+            if self.cache_features:
+                self._feature_cache[feature_path] = data
         return data['features'], data['label']
 
     def normalize(self, video, label, file_id=None):
@@ -345,7 +393,8 @@ class VideoDataset(data.Dataset):
             Tuple of (normalized_video_tensor, label).
         """
         video, label = self.data_aug(video, label, file_id)
-        video = video.float() / 127.5 - 1
+        if not self.gpu_augment:
+            video = video.float() / 127.5 - 1
         return video, label
 
     def transform(self):
@@ -356,6 +405,11 @@ class VideoDataset(data.Dataset):
         """
         if self.transform_mode == "train":
             print("Apply training transform.")
+            if self.gpu_augment:
+                return video_augmentation.Compose([
+                    video_augmentation.ToTensor(),
+                    video_augmentation.TemporalRescale(0.2, self.frame_interval),
+                ])
             return video_augmentation.Compose([
                 video_augmentation.RandomCrop(224),
                 video_augmentation.RandomHorizontalFlip(0.5),
@@ -365,6 +419,10 @@ class VideoDataset(data.Dataset):
             ])
         else:
             print("Apply testing transform.")
+            if self.gpu_augment:
+                return video_augmentation.Compose([
+                    video_augmentation.ToTensor(),
+                ])
             return video_augmentation.Compose([
                 video_augmentation.CenterCrop(224),
                 video_augmentation.Resize(self.image_scale),
@@ -380,3 +438,24 @@ class VideoDataset(data.Dataset):
         if self.limit_len is not None:
             return min(len(self.inputs_list), self.limit_len)
         return len(self.inputs_list)
+
+    def sample_lengths(self):
+        """Return approximate raw sequence lengths for optional bucketing."""
+        if self.data_type == "memmap":
+            self.init_memmap()
+            return [
+                self.info[fi["fileid"] + ".npy"][1] - self.info[fi["fileid"] + ".npy"][0]
+                for fi in self.inputs_list[:len(self)]
+            ]
+        if self.data_type == "video":
+            if not self.cache_file_lists:
+                return [1] * len(self)
+            self._precache_file_lists()
+            return [len(self._file_list_cache[self._video_glob(fi)]) for fi in self.inputs_list[:len(self)]]
+        return [1] * len(self)
+
+    def __getstate__(self):
+        """Avoid serializing an open memmap when workers use spawn."""
+        state = self.__dict__.copy()
+        state.pop("mem", None)
+        return state

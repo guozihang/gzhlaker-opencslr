@@ -29,13 +29,37 @@ class ConfigManager:
         "feeder_args": {
             "mode", "datatype", "num_gloss", "drop_ratio", "frame_interval",
             "image_scale", "skip_fileids", "skip_indices", "skip_info_path",
-            "allowable_vid_length", "limit_len",
+            "allowable_vid_length", "limit_len", "cache_file_lists",
+            "cache_features", "precache_file_lists", "gpu_augment",
         },
         "optimizer_args": {
             "optimizer", "base_lr", "step", "learning_ratio", "weight_decay",
             "start_epoch", "nesterov",
         },
+        "loss_weights": {"SeqCTC", "ConvCTC", "Dist", "Cu", "Cp", "Slow", "Fast"},
         "wandb": {"enable", "project", "entity"},
+    }
+
+    TYPE_RULES = {
+        "model_args": {
+            "num_classes": int, "hidden_size": int, "c2d_type": str,
+            "conv_type": int, "kernel_size": list, "use_bn": int,
+            "share_classifier": (bool, int), "weight_norm": bool,
+            "slowfast_config": str, "stride": list,
+        },
+        "feeder_args": {
+            "mode": str, "datatype": str, "num_gloss": int, "drop_ratio": (int, float),
+            "frame_interval": int, "image_scale": (int, float),
+            "allowable_vid_length": int, "limit_len": (int, type(None)),
+            "cache_file_lists": bool, "cache_features": bool,
+            "precache_file_lists": bool, "gpu_augment": bool,
+        },
+        "optimizer_args": {
+            "optimizer": str, "base_lr": (int, float), "step": list,
+            "learning_ratio": (int, float), "weight_decay": (int, float),
+            "start_epoch": int, "nesterov": bool,
+        },
+        "wandb": {"enable": bool, "project": str, "entity": str},
     }
 
     @classmethod
@@ -64,6 +88,13 @@ class ConfigManager:
                     f"Unknown key(s) in '{section}': {sorted(unknown)}. "
                     f"Allowed: {sorted(known)}."
                 )
+            rules = cls.TYPE_RULES.get(section, {})
+            for key, expected in rules.items():
+                if key in value and not isinstance(value[key], expected):
+                    raise TypeError(
+                        f"Invalid type for '{section}.{key}': expected {expected}, "
+                        f"got {type(value[key]).__name__}"
+                    )
 
     @classmethod
     def load_experiment(cls, config_path):

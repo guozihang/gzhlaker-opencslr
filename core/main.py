@@ -44,9 +44,12 @@ def run():
 
     通过 ExperimentManager 运行指定配置的训练、验证和测试。
     """
-    ExperimentManager.run()
-    DeviceManager.barrier()
-    DeviceManager.cleanup()
+    try:
+        ExperimentManager.run()
+        DeviceManager.barrier()
+    finally:
+        DataloaderManager.shutdown()
+        DeviceManager.cleanup()
 
 def infer(video, video_length):
     """对输入视频进行推理。

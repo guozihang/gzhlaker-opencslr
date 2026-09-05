@@ -21,6 +21,7 @@ from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 from manager.log_manager import LogManager
 from manager.device_manager import DeviceManager
+from manager.dataloader_manager import DataloaderManager
 from models.keys import Keys
 
 def get_feeder_arg(cfg, key, default=None):
@@ -60,12 +61,13 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
     total_loss_dict = {}    # dict of all types of loss
     clr = [group['lr'] for group in optimizer.param_groups]
     scaler = GradScaler()
-    for batch_idx, data in enumerate(tqdm(loader, disable=not DeviceManager.is_main_process())):
+    iterator = DataloaderManager.get_iterator("train") if loader is DataloaderManager.get("train") else loader
+    for batch_idx, data in enumerate(tqdm(iterator, disable=not DeviceManager.is_main_process())):
         data = {
-            Keys.VID: DeviceManager.to(data[0]),
-            Keys.VID_LGT: DeviceManager.to(data[1]),
-            Keys.LABEL: DeviceManager.to(data[2]),
-            Keys.LABEL_LGT: DeviceManager.to(data[3])
+            Keys.VID: data[0] if isinstance(data[0], torch.Tensor) and data[0].device == DeviceManager.output_device else DeviceManager.to(data[0]),
+            Keys.VID_LGT: data[1] if isinstance(data[1], torch.Tensor) and data[1].device == DeviceManager.output_device else DeviceManager.to(data[1]),
+            Keys.LABEL: data[2] if isinstance(data[2], torch.Tensor) and data[2].device == DeviceManager.output_device else DeviceManager.to(data[2]),
+            Keys.LABEL_LGT: data[3] if isinstance(data[3], torch.Tensor) and data[3].device == DeviceManager.output_device else DeviceManager.to(data[3])
         }
         optimizer.zero_grad()
         with autocast():
@@ -128,7 +130,8 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
     skip_failed_eval_batches = get_feeder_arg(cfg, "skip_failed_eval_batches", False)
     #save_file = {}
     stat = {i: [0, 0] for i in range(len(loader.dataset.dict))}
-    for batch_idx, data in enumerate(tqdm(loader)):
+    iterator = DataloaderManager.get_iterator(mode) if loader is DataloaderManager.get(mode) else loader
+    for batch_idx, data in enumerate(tqdm(iterator)):
         batch_info = data[-1]
         batch_shape = tuple(data[0].shape)
         batch_lgt = data[1].tolist()
@@ -140,10 +143,10 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
             continue
         try:
             data = {
-                Keys.VID : DeviceManager.to( data [ 0 ] ) ,
-                Keys.VID_LGT : DeviceManager.to( data [ 1 ] ) ,
-                Keys.LABEL : DeviceManager.to( data [ 2 ] ) ,
-                Keys.LABEL_LGT : DeviceManager.to( data [ 3 ] ),
+                Keys.VID : data[0] if isinstance(data[0], torch.Tensor) and data[0].device == DeviceManager.output_device else DeviceManager.to(data[0]),
+                Keys.VID_LGT : data[1] if isinstance(data[1], torch.Tensor) and data[1].device == DeviceManager.output_device else DeviceManager.to(data[1]),
+                Keys.LABEL : data[2] if isinstance(data[2], torch.Tensor) and data[2].device == DeviceManager.output_device else DeviceManager.to(data[2]),
+                Keys.LABEL_LGT : data[3] if isinstance(data[3], torch.Tensor) and data[3].device == DeviceManager.output_device else DeviceManager.to(data[3]),
                 Keys.INFO: batch_info
             }
             with torch.no_grad():

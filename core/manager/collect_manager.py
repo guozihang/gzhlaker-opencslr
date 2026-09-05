@@ -77,25 +77,29 @@ class CollectManager:
         ])
         right_pad = int(np.ceil(max_len / total_stride)) * total_stride - max_len + left_pad
         padded_len = max_len + left_pad + right_pad
-        padded = []
-        for video in videos:
-            padded.append(torch.cat((
-                video[0][None].expand(left_pad, -1, -1, -1),
-                video,
-                video[-1][None].expand(padded_len - len(video) - left_pad, -1, -1, -1),
-            ), dim=0))
-        return torch.stack(padded), video_length
+        padded = videos[0].new_empty((len(videos), padded_len, *videos[0].shape[1:]))
+        for batch_index, video in enumerate(videos):
+            length = len(video)
+            if left_pad:
+                padded[batch_index, :left_pad].copy_(video[0])
+            padded[batch_index, left_pad:left_pad + length].copy_(video)
+            right_start = left_pad + length
+            if right_start < padded_len:
+                padded[batch_index, right_start:].copy_(video[-1])
+        return padded, video_length
 
     @staticmethod
     def _collate_features(videos):
         """整理 ``(T,D)`` 时序特征，不应用 raw video 的时序 padding 规则。"""
         max_len = len(videos[0])
         video_length = torch.LongTensor([len(video) for video in videos])
-        padded = [torch.cat((
-            video,
-            video[-1][None].expand(max_len - len(video), -1),
-        ), dim=0) for video in videos]
-        return torch.stack(padded).permute(0, 2, 1), video_length
+        padded = videos[0].new_empty((len(videos), max_len, videos[0].shape[1]))
+        for batch_index, video in enumerate(videos):
+            length = len(video)
+            padded[batch_index, :length].copy_(video)
+            if length < max_len:
+                padded[batch_index, length:].copy_(video[-1])
+        return padded.permute(0, 2, 1), video_length
 
     @staticmethod
     def _collate_labels(labels):

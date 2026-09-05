@@ -54,6 +54,9 @@ class DatasetManager:
                 gloss_dict = cls.GLOSS_DICT ,
                 **dataset_arg
             )
+            if mode == "train" and getattr(arg, "preopen_memmap", False):
+                if dataset_arg.get("datatype") == "memmap":
+                    cls.DATASET_OBJECT[mode].init_memmap()
         LogManager.info ( "Loading data finished." )
 
     @classmethod
