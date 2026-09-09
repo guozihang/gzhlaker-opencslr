@@ -1,10 +1,3 @@
-# -*- encoding: utf-8 -*-
-"""OpenCSLR 实验管理器模块。
-
-负责任务的实验流程编排，包括模型初始化、训练循环、模型评估、
-模型保存与加载、断点续训、推理等核心功能。
-"""
-
 import os
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -22,6 +15,14 @@ from .module_manager import ModuleManager
 from .device_manager import DeviceManager
 from pipline.single import seq_train, seq_eval
 from models.keys import Keys
+
+# 导入新的 seed 管理工具
+try:
+    from utils.seed_utils import set_seed, get_rng_state, set_rng_state
+    SEED_UTILS_AVAILABLE = True
+except ImportError:
+    SEED_UTILS_AVAILABLE = False
+    print("Warning: seed_utils not available, using legacy seed management")
 
 class ExperimentManager:
     """实验管理器。
@@ -60,16 +61,28 @@ class ExperimentManager:
 
         如果配置了 random_fix，则固定 Torch、NumPy、Python 内置随机数
         生成器的种子，确保实验结果可复现。
+
+        优先使用新的 seed_utils 模块（如果可用），否则使用旧的实现。
         """
-        if cls.arg.random_fix:
-            seed = cls.arg.random_seed + DeviceManager.rank
+        if not cls.arg.random_fix:
+            return
+
+        seed = cls.arg.random_seed
+        rank = DeviceManager.rank
+
+        if SEED_UTILS_AVAILABLE:
+            # 使用新的 seed 管理工具
+            set_seed(seed, rank, deterministic=True)
+        else:
+            # 使用旧的实现（向后兼容）
+            effective_seed = seed + rank
             torch.set_num_threads ( 1 )
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-            torch.manual_seed ( seed )
-            torch.cuda.manual_seed_all ( seed )
-            np.random.seed ( seed )
-            random.seed ( seed )
+            torch.manual_seed ( effective_seed )
+            torch.cuda.manual_seed_all ( effective_seed )
+            np.random.seed ( effective_seed )
+            random.seed ( effective_seed )
 
     @classmethod
     def save_rng_state(cls):
@@ -81,12 +94,16 @@ class ExperimentManager:
         Returns:
             dict: 包含各随机数生成器状态的字典
         """
-        rng_dict = {}
-        rng_dict["torch"] = torch.get_rng_state()
-        rng_dict["cuda"] = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-        rng_dict["numpy"] = np.random.get_state()
-        rng_dict["random"] = random.getstate()
-        return rng_dict
+        if SEED_UTILS_AVAILABLE:
+            return get_rng_state()
+        else:
+            # 旧实现（向后兼容）
+            rng_dict = {}
+            rng_dict["torch"] = torch.get_rng_state()
+            rng_dict["cuda"] = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            rng_dict["numpy"] = np.random.get_state()
+            rng_dict["random"] = random.getstate()
+            return rng_dict
 
     @classmethod
     def set_rng_state(cls, rng_dict):
@@ -98,13 +115,17 @@ class ExperimentManager:
         Args:
             rng_dict: 包含各随机数生成器状态的字典
         """
-        # 断点续训时 checkpoint 经 map_location=output_device 加载,rng 张量会被
-        # 迁到 GPU 上,而 torch.set_rng_state 只接受 CPU 的 ByteTensor,故显式 .cpu()。
-        torch.set_rng_state(rng_dict["torch"].cpu())
-        if rng_dict.get("cuda") is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all([s.cpu() for s in rng_dict["cuda"]])
-        np.random.set_state(rng_dict["numpy"])
-        random.setstate(rng_dict["random"])
+        if SEED_UTILS_AVAILABLE:
+            set_rng_state(rng_dict)
+        else:
+            # 旧实现（向后兼容）
+            # 断点续训时 checkpoint 经 map_location=output_device 加载,rng 张量会被
+            # 迁到 GPU 上,而 torch.set_rng_state 只接受 CPU 的 ByteTensor,故显式 .cpu()。
+            torch.set_rng_state(rng_dict["torch"].cpu())
+            if rng_dict.get("cuda") is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all([s.cpu() for s in rng_dict["cuda"]])
+            np.random.set_state(rng_dict["numpy"])
+            random.setstate(rng_dict["random"])
 
     @classmethod
     def init_module( cls ):

@@ -1,0 +1,39 @@
+name: openslr
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python version
+  - python=3.7
+
+  # Core deep learning
+  - pytorch>=1.8.0
+  - torchvision>=0.9.0
+  - cudatoolkit=10.2  # Adjust based on your CUDA version
+
+  # Data / image / video
+  - numpy
+  - opencv
+  - pillow
+  - pandas
+
+  # Augmentation / visualization
+  # NOTE: scipy<1.3.0 required for core/libs/video_augmentation.py
+  # which calls scipy.misc.imresize/imrotate (removed in scipy 1.3.0)
+  - scipy<1.3.0
+  - matplotlib
+
+  # Config / progress / logging / console
+  - pyyaml
+  - tqdm
+  - loguru
+  - rich
+
+  # Pip-only dependencies
+  - pip
+  - pip:
+    - fvcore
+    - oss2
+    - wandb

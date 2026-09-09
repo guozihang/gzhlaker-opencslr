@@ -1,0 +1,105 @@
+# Unified Protocol Configuration for CSL-Daily
+# OpenCSLR v1.0.0
+
+# ============================================================================
+# Experiment Metadata
+# ============================================================================
+experiment_name: baseline_csl_daily_unified
+protocol: unified
+random_fix: true
+random_seed: 0
+
+# ============================================================================
+# Dataset Configuration
+# ============================================================================
+dataset: csl-daily
+feeder: dataset.dataloader_video.VideoDataset
+feeder_args:
+    # Data type: video (JPEG frames), lmdb, memmap, or features
+    datatype: video
+
+    # Preprocessing (unified protocol)
+    resize_shape: [256, 256]
+    crop_shape: [224, 224]
+    mean: [0.485, 0.456, 0.406]  # ImageNet normalization
+    std: [0.229, 0.224, 0.225]
+
+    # Augmentation (training only)
+    random_flip: true
+    center_crop: false  # False = random crop for training
+
+    # Data loading optimization
+    cache_file_lists: true
+    cache_features: false
+    precache_file_lists: true
+    gpu_augment: true  # GPU-accelerated augmentation
+
+# ============================================================================
+# Model Configuration
+# ============================================================================
+model: models.build_function.build_slowfast
+model_args:
+    num_classes: 2000  # CSL-Daily vocabulary size
+    hidden_size: 1024
+    c2d_type: slowfast101
+    kernel_size: ['K5', 'P2', 'K5', 'P2']
+
+# ============================================================================
+# Training Configuration
+# ============================================================================
+phase: train
+num_epoch: 60  # CSL-Daily typically uses fewer epochs
+batch_size: 8
+eval_interval: 1
+save_interval: 5
+
+# Learning rate schedule
+optimizer_args:
+    optimizer: Adam
+    base_lr: 0.0001
+    step: [30, 45]  # Learning rate decay at these epochs (adjusted for 60 epochs)
+    learning_rate_decay: 0.1
+    weight_decay: 0.0001
+    start_epoch: 0
+
+# ============================================================================
+# Decoder Configuration (Unified Protocol)
+# ============================================================================
+decoder_args:
+    decode_mode: greedy  # Options: greedy, beam
+    beam_size: 10  # Used when decode_mode=beam
+    lm_weight: 0.0  # Language model weight (0.0 = disabled)
+
+# ============================================================================
+# Hardware Configuration
+# ============================================================================
+device: 0,1  # GPU device IDs (comma-separated)
+num_worker: 4  # DataLoader workers for training
+eval_num_worker: 0  # DataLoader workers for evaluation (0 = main process)
+
+# Data loading optimization
+prefetch_factor: 2
+persistent_workers: true
+pin_memory: true
+worker_threads: 1
+preopen_memmap: true
+gpu_prefetch: true
+length_bucket_size: 0  # 0 = disabled, 4 or 8 to enable bucketing
+
+# ============================================================================
+# Logging & Checkpointing
+# ============================================================================
+work_dir: ./work_dir/baseline_csl_daily_unified
+print_log: true
+log_interval: 20
+
+# Weights & Biases (optional)
+# wandb: false
+# wandb_project: openslr
+# wandb_run_name: baseline_csl_daily_unified
+
+# ============================================================================
+# Checkpoints (optional)
+# ============================================================================
+# load_weights: null  # Path to pretrained weights
+# load_checkpoints: null  # Path to checkpoint for resuming training
