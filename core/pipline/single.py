@@ -12,6 +12,7 @@ import faulthandler
 
 faulthandler.enable()
 import sys
+from pathlib import Path
 import torch
 import torch.distributed as dist
 import numpy as np
@@ -23,6 +24,47 @@ from manager.log_manager import LogManager
 from manager.device_manager import DeviceManager
 from manager.dataloader_manager import DataloaderManager
 from models.keys import Keys
+
+try:
+    from utils.sample_statistics import SampleStatistics
+    STATS_AVAILABLE = True
+except ImportError:
+    STATS_AVAILABLE = False
+
+
+def _sample_ids(batch_info):
+    """从 collate 后的 info 中取出样本 ID(与 CTM 输出保持同一口径)。"""
+    return [str(file_name).split("|")[0] for file_name in batch_info]
+
+
+def _save_sample_statistics(stats, work_dir, mode):
+    """保存样本统计并在跳过率超阈值时告警。
+
+    写入 work_dir/sample_statistics_{mode}.json(dev/test 各一份,互不覆盖)。
+
+    Args:
+        stats: SampleStatistics 对象;为 None 时直接返回。
+        work_dir: 实验工作目录。
+        mode: 评估模式("dev"/"test")。
+
+    Returns:
+        pathlib.Path: 统计文件路径;未保存时返回 None。
+    """
+    if stats is None:
+        return None
+    path = Path(work_dir) / "sample_statistics_{}.json".format(mode)
+    try:
+        stats.save(path)
+    except Exception as err:
+        LogManager.error(f"Failed to save sample statistics to {path}: {err}")
+        return None
+    stats.print_summary()
+    if not stats.is_valid:
+        LogManager.info(
+            "WARNING: {} skip rate {:.2f}% exceeds 5% threshold, "
+            "experiment marked INVALID ({})".format(mode, stats.skip_rate * 100, path)
+        )
+    return path
 
 def get_feeder_arg(cfg, key, default=None):
     """从配置的 feeder_args 中获取指定 key 的值。
@@ -61,7 +103,8 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
     total_loss_dict = {}    # dict of all types of loss
     clr = [group['lr'] for group in optimizer.param_groups]
     scaler = GradScaler()
-    iterator = DataloaderManager.get_iterator("train") if loader is DataloaderManager.get("train") else loader
+    registered = DataloaderManager.DATALOADER.get("train")
+    iterator = DataloaderManager.get_iterator("train") if registered is not None and loader is registered else loader
     for batch_idx, data in enumerate(tqdm(iterator, disable=not DeviceManager.is_main_process())):
         data = {
             Keys.VID: data[0] if isinstance(data[0], torch.Tensor) and data[0].device == DeviceManager.output_device else DeviceManager.to(data[0]),
@@ -130,39 +173,60 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
     skip_failed_eval_batches = get_feeder_arg(cfg, "skip_failed_eval_batches", False)
     #save_file = {}
     stat = {i: [0, 0] for i in range(len(loader.dataset.dict))}
-    iterator = DataloaderManager.get_iterator(mode) if loader is DataloaderManager.get(mode) else loader
-    for batch_idx, data in enumerate(tqdm(iterator)):
-        batch_info = data[-1]
-        batch_shape = tuple(data[0].shape)
-        batch_lgt = data[1].tolist()
-        if max_eval_frames is not None and len(batch_shape) > 1 and batch_shape[1] > int(max_eval_frames):
-            LogManager.info(
-                f"Skip {mode} batch {batch_idx}: shape={batch_shape}, "
-                f"vid_lgt={batch_lgt}, info={batch_info}"
-            )
-            continue
-        try:
-            data = {
-                Keys.VID : data[0] if isinstance(data[0], torch.Tensor) and data[0].device == DeviceManager.output_device else DeviceManager.to(data[0]),
-                Keys.VID_LGT : data[1] if isinstance(data[1], torch.Tensor) and data[1].device == DeviceManager.output_device else DeviceManager.to(data[1]),
-                Keys.LABEL : data[2] if isinstance(data[2], torch.Tensor) and data[2].device == DeviceManager.output_device else DeviceManager.to(data[2]),
-                Keys.LABEL_LGT : data[3] if isinstance(data[3], torch.Tensor) and data[3].device == DeviceManager.output_device else DeviceManager.to(data[3]),
-                Keys.INFO: batch_info
-            }
-            with torch.no_grad():
-                ret_dict = model(data)
-        except RuntimeError as err:
-            LogManager.error(
-                f"Eval failed at {mode} batch {batch_idx}: shape={batch_shape}, "
-                f"vid_lgt={batch_lgt}, info={batch_info}, error={err}"
-            )
-            if skip_failed_eval_batches and "illegal memory access" not in str(err).lower():
-                torch.cuda.empty_cache()
+    stats = None
+    if STATS_AVAILABLE:
+        stats = SampleStatistics(
+            total_samples=len(loader.dataset),
+            experiment_name=Path(work_dir).name or "{}_eval".format(mode),
+        )
+    registered = DataloaderManager.DATALOADER.get(mode)
+    iterator = DataloaderManager.get_iterator(mode) if registered is not None and loader is registered else loader
+    try:
+        for batch_idx, data in enumerate(tqdm(iterator)):
+            batch_info = data[-1]
+            batch_ids = _sample_ids(batch_info) if stats is not None else None
+            batch_shape = tuple(data[0].shape)
+            batch_lgt = data[1].tolist()
+            if max_eval_frames is not None and len(batch_shape) > 1 and batch_shape[1] > int(max_eval_frames):
+                LogManager.info(
+                    f"Skip {mode} batch {batch_idx}: shape={batch_shape}, "
+                    f"vid_lgt={batch_lgt}, info={batch_info}"
+                )
+                if stats is not None:
+                    for sample_id in batch_ids:
+                        stats.record_skip(sample_id, reason="frames_exceeded")
                 continue
-            raise
+            try:
+                data = {
+                    Keys.VID : data[0] if isinstance(data[0], torch.Tensor) and data[0].device == DeviceManager.output_device else DeviceManager.to(data[0]),
+                    Keys.VID_LGT : data[1] if isinstance(data[1], torch.Tensor) and data[1].device == DeviceManager.output_device else DeviceManager.to(data[1]),
+                    Keys.LABEL : data[2] if isinstance(data[2], torch.Tensor) and data[2].device == DeviceManager.output_device else DeviceManager.to(data[2]),
+                    Keys.LABEL_LGT : data[3] if isinstance(data[3], torch.Tensor) and data[3].device == DeviceManager.output_device else DeviceManager.to(data[3]),
+                    Keys.INFO: batch_info
+                }
+                with torch.no_grad():
+                    ret_dict = model(data)
+            except RuntimeError as err:
+                LogManager.error(
+                    f"Eval failed at {mode} batch {batch_idx}: shape={batch_shape}, "
+                    f"vid_lgt={batch_lgt}, info={batch_info}, error={err}"
+                )
+                if skip_failed_eval_batches and "illegal memory access" not in str(err).lower():
+                    if stats is not None:
+                        for sample_id in batch_ids:
+                            stats.record_failure(sample_id, err)
+                    torch.cuda.empty_cache()
+                    continue
+                raise
+            if stats is not None:
+                for sample_id in batch_ids:
+                    stats.record_success(sample_id)
 
-        total_info += [file_name.split("|")[0] for file_name in data[Keys.INFO]]
-        total_sent += ret_dict[Keys.RECOGNIZED_SENTS]
+            total_info += [file_name.split("|")[0] for file_name in data[Keys.INFO]]
+            total_sent += ret_dict[Keys.RECOGNIZED_SENTS]
+    finally:
+        # 即使评估中途失败也落盘已记录的样本统计,便于定位坏样本
+        _save_sample_statistics(stats, work_dir, mode)
     try:
         LogManager.info(work_dir)
         write2file(work_dir + "output-hypothesis-{}.ctm".format(mode), total_info, total_sent)
@@ -173,11 +237,16 @@ def seq_eval(cfg, loader, model, device, mode, epoch, work_dir):
     except Exception as e:
         LogManager.error(f"Unexpected error during evaluation: {e}")
         ret = "Percent Total Error       =  100.00%   (ERROR)"
-        return float(ret.split("=")[1].split("%")[0])
-    finally:
-        pass
+    wer = float(ret.split("=")[1].split("%")[0])
     LogManager.info("Epoch {}, {} {}".format(epoch, mode, ret))
-    return float(ret.split("=")[1].split("%")[0])
+    try:
+        result_path = EvaluationManager.save_evaluation_results(
+            wer=wer, stats=stats, config=cfg, work_dir=work_dir, split=mode)
+        if result_path is not None:
+            LogManager.info(f"Saved evaluation result to {result_path}")
+    except Exception as e:
+        LogManager.error(f"Failed to save evaluation result: {e}")
+    return wer
 
 def write2file(path, info, output):
     """将识别结果写入 CTM 格式的文件。

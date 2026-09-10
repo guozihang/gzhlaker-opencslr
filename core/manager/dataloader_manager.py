@@ -18,6 +18,12 @@ from .device_manager import DeviceManager
 from .cuda_prefetcher import CUDAPrefetcher
 from .length_bucket_sampler import LengthBucketBatchSampler
 
+try:
+    from utils.seed_utils import seed_worker
+    SEED_WORKER_AVAILABLE = True
+except ImportError:
+    SEED_WORKER_AVAILABLE = False
+
 class DataloaderManager:
     """
     The static class that handle the dataloader object
@@ -27,10 +33,16 @@ class DataloaderManager:
 
     @staticmethod
     def _worker_init(worker_id, threads):
-        """Prevent each IO worker from spawning its own CPU thread pool."""
+        """Prevent each IO worker from spawning its own CPU thread pool.
+
+        Also derives the numpy/random seeds of every worker from the DataLoader
+        base seed, so augmentation stays reproducible for a fixed random_seed.
+        """
         torch.set_num_threads(threads)
         cv2.setNumThreads(threads)
         os.environ.setdefault("OMP_NUM_THREADS", str(threads))
+        if SEED_WORKER_AVAILABLE:
+            seed_worker(worker_id)
 
     @classmethod
     def init(cls):

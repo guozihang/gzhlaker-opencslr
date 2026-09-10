@@ -11,14 +11,25 @@ preprocess_hyp)。与初始化链中的其他管理器不同,本管理器不持�
   2. ground-truth STM(evaluate_dir/groundtruth/)按句 ID 排序(等价 sort -k1,1);
   3. merge_ctm_stm 为缺失句补齐 [EMPTY] 行;
   4. pysclite 对齐 CTM 与 STM,输出 sum/rsum/pra 报告并计算 WER。
+
+此外提供 save_evaluation_results,把 WER 与样本统计汇总为统一的
+experiment_result.json,供结果聚合与论文表格使用。
 """
 
 import os
 import re
 import shutil
+from datetime import datetime
+from pathlib import Path
 
 from libs.pysclite import scores as _sc
 from libs.pysclite import stmctm as _stmctm
+
+try:
+    from utils.result_aggregator import ExperimentResult, save_experiment_result
+    RESULT_AGG_AVAILABLE = True
+except ImportError:
+    RESULT_AGG_AVAILABLE = False
 
 
 class EvaluationManager:
@@ -223,3 +234,64 @@ class EvaluationManager:
             _sc.dump_SCORES_alignments(scor, f.write, 1000, False)
 
         return "Percent Total Error       =  {:6.2f}%   (OpenCSLR)".format(wer)
+
+    @classmethod
+    def save_evaluation_results(cls, wer, stats=None, config=None, work_dir="./", split="test"):
+        """保存结构化的评估结果(供论文表格与多实验比较使用)。
+
+        把 WER 与样本统计(SampleStatistics)整理成统一的 ExperimentResult,
+        写入 work_dir。test 分割写入 ``experiment_result.json``(单次实验的
+        权威结果),其它分割写入 ``experiment_result_{split}.json``。
+
+        结果汇总工具缺失(未安装 pandas 等依赖)时静默返回 None,不影响评估。
+
+        Args:
+            wer: 词错误率(百分比数值,如 23.45)。
+            stats: 可选的 SampleStatistics 对象;为 None 时样本字段留空。
+            config: 实验配置(argparse.Namespace 或 dict),读取 dataset/model 等字段。
+            work_dir: 输出目录,通常为实验的 work_dir。
+            split: 评估分割("dev"/"test"),用于区分输出文件与结果记录。
+
+        Returns:
+            pathlib.Path: 结果文件路径;未保存时返回 None。
+        """
+        if not RESULT_AGG_AVAILABLE:
+            return None
+
+        def get(key, default=None):
+            if isinstance(config, dict):
+                return config.get(key, default)
+            return getattr(config, key, default)
+
+        decoder_args = get("decoder_args") or {}
+        if not isinstance(decoder_args, dict):
+            decoder_args = {}
+        decode_mode = decoder_args.get("decode_mode") or get("decode_mode") or "greedy"
+        beam_size = decoder_args.get("beam_size")
+        decoder = "beam-{}".format(beam_size) if decode_mode == "beam" and beam_size else str(decode_mode)
+
+        result = ExperimentResult(
+            experiment_name=get("experiment_name") or Path(work_dir).name or "unnamed",
+            protocol=get("protocol") or "unified",
+            seed=int(get("random_seed", 0) or 0),
+            dataset=get("dataset") or "unknown",
+            split=split,
+            model=get("model") or "unknown",
+            decoder=decoder,
+            decoder_config=decoder_args or None,
+            wer=wer,
+            total_samples=stats.total_samples if stats else None,
+            successful_samples=stats.num_successful if stats else None,
+            skipped_samples=stats.num_skipped if stats else None,
+            failed_samples=stats.num_failed if stats else None,
+            skip_rate=round(stats.skip_rate, 4) if stats else None,
+            status=stats.status if stats else None,
+            timestamp=datetime.now().isoformat(),
+            work_dir=str(work_dir),
+            config_path=os.fspath(get("config")) if get("config") else None,
+        )
+        output_path = Path(work_dir) / (
+            "experiment_result.json" if split == "test" else "experiment_result_{}.json".format(split)
+        )
+        save_experiment_result(result, output_path)
+        return output_path

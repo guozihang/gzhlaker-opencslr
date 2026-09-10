@@ -1,7 +1,7 @@
 # 数据加速功能状态总结
 
-**更新时间**: 2024-09-09  
-**相关文档**: `HANDOFF_DATA_LOADING_ACCELERATION.md`, `EXECUTION_PLAN.md`
+**更新时间**: 2026-09-10  
+**相关文档**: `EXECUTION_PLAN.md`（`HANDOFF_DATA_LOADING_ACCELERATION.md` 已合并删除）
 
 ---
 
@@ -61,6 +61,30 @@ feeder_args:
 
 ---
 
+## 代码集成状态（✅ 已完成 2026-09-10）
+
+`EXECUTION_PLAN.md §1.1` 的三个集成点已落地：
+
+- `core/pipline/single.py`：`seq_eval` 用 `SampleStatistics` 记录成功 / 跳过（`frames_exceeded`）/ 失败样本，
+  落盘 `sample_statistics_{dev,test}.json`，跳过率 >5% 时告警；返回值仍为 float WER，调用方无需改动。
+- `core/manager/dataloader_manager.py`：`_worker_init` 在限制线程数之外调用 `utils.seed_utils.seed_worker`，
+  固定 `random_seed` 时多 worker 的数据增强可复现。
+- `core/manager/evaluation_manager.py`：新增 `save_evaluation_results()`，写
+  `experiment_result_{dev,test}.json`（test 同时使用权威名 `experiment_result.json`），保存失败不影响训练。
+
+本地 CPU 验证（无需 GPU 与数据集，缺失依赖自动注入桩模块）：
+
+```bash
+cd core
+python tests/test_stats_integration.py
+```
+
+**配置加载说明**：实验仍通过 `--config configs/exp.yaml --exp <name>` 启动；
+`configs/unified_*.yaml` 模板暂不能被 `--config` 直接加载（`ArgumentManager` 不认识
+`experiment_name` / `protocol` / `decoder_args`，`ConfigManager` 只支持分节 + `network:` 引用）。
+
+---
+
 ## 待服务器验证的功能（⏳ 未测试）
 
 根据交接文档，以下功能**已实现但未在 GPU 环境验证**：
@@ -81,7 +105,7 @@ feeder_args:
 
 #### 第 1 步：默认配置短实验
 ```bash
-python main.py --config configs/unified_phoenix2014.yaml \
+python main.py --config configs/exp.yaml --exp baseline \
     --num_epoch 1 \
     --work-dir /tmp/baseline_test
 ```
@@ -95,7 +119,7 @@ python main.py --config configs/unified_phoenix2014.yaml \
 #### 第 2 步：Worker 配置扫描
 ```bash
 for workers in 0 2 4 8; do
-    python main.py --config configs/unified_phoenix2014.yaml \
+    python main.py --config configs/exp.yaml --exp baseline \
         --num-worker $workers \
         --num_epoch 1
 done
@@ -108,11 +132,20 @@ done
 
 #### 第 3 步：数据类型对比
 ```bash
+# 注意：命令行 --feeder-args 是“整体覆盖”而非“合并”，必须传完整字典
+# （只传 {"datatype": ...} 会让其它 feeder 参数退回 parser 默认值）。
+# 也可以直接改 configs/exp.yaml 里对应实验节的 feeder_args。
+FEEDER_COMMON='"mode": "train", "num_gloss": -1, "drop_ratio": 1.0, "frame_interval": 1, "image_scale": 1.0, "cache_file_lists": true, "cache_features": true, "precache_file_lists": false'
+
 # Memmap（推荐）
---feeder-args '{"datatype": "memmap"}'
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"memmap\", \"gpu_augment\": true}" \
+    --num_epoch 1
 
 # JPEG（fallback）
---feeder-args '{"datatype": "video"}'
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"video\", \"gpu_augment\": true}" \
+    --num_epoch 1
 ```
 
 **决策**: 优先使用 memmap，除非文件缺失或损坏。
@@ -123,19 +156,23 @@ done
 python -c "import torch; print(torch.cuda.is_available())"
 nvidia-smi
 
-# 启用 GPU 加速
-python main.py --config configs/unified_phoenix2014.yaml \
-    --gpu-augment true \
+# 启用 GPU 加速（gpu_augment 属 feeder_args，见第 3 步的完整字典）
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"memmap\", \"gpu_augment\": true}" \
     --gpu-prefetch true \
     --num_epoch 1
+
+# 关闭 GPU 加速作为对照：把字典里的 gpu_augment 改为 false、去掉 --gpu-prefetch
 ```
 
 **对比**: 与关闭 GPU 加速的基线比较吞吐量提升。
 
 #### 第 5 步：Length Bucketing（可选）
 ```bash
-# 仅当不需要严格复现采样顺序时使用
---length-bucket-size 4  # 或 8
+# 仅当不需要严格复现采样顺序时使用（4 或 8）
+python main.py --config configs/exp.yaml --exp baseline \
+    --length-bucket-size 4 \
+    --num_epoch 1
 ```
 
 **决策**: 如果 padding 浪费严重（变长视频多），启用 bucketing。但会改变采样顺序，影响复现性。

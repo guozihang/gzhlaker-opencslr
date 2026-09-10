@@ -1,13 +1,32 @@
 # OpenCSLR v1.0.0 执行计划
 
-**最后更新**: 2024-09-09  
-**当前阶段**: 基础设施完成，准备代码集成和服务器验证
+**最后更新**: 2026-09-10  
+**当前阶段**: 代码集成完成，准备服务器验证与加速调优
 
 ---
 
 ## 一、立即执行任务（按优先级）
 
-### 1.1 完成剩余代码集成（2-4 小时）
+### 1.1 完成剩余代码集成（2-4 小时）✅ 已完成
+
+**落地位置与实现差异**（下文伪代码为设计参考，以实际代码为准）：
+
+| 文件 | 实现 |
+|------|------|
+| `core/pipline/single.py` | `seq_eval` 用 `SampleStatistics` 记录成功/跳过（`frames_exceeded`）/失败样本，落盘 `sample_statistics_{dev,test}.json`（dev/test 互不覆盖），跳过率 >5% 时告警；返回值仍是 float WER，`ExperimentManager` 无需改动 |
+| `core/manager/dataloader_manager.py` | `_worker_init` 在限制线程数之外调用 `utils.seed_utils.seed_worker`，固定 `random_seed` 时 worker 内增强可复现 |
+| `core/manager/evaluation_manager.py` | 新增 `save_evaluation_results()`，由 `seq_eval` 调用写出 `experiment_result_{dev,test}.json`（test 同时使用权威名 `experiment_result.json`）；保存失败只记日志，不影响训练 |
+
+本地验证（无需 GPU / 数据集）：
+
+```bash
+cd core
+python tests/test_stats_integration.py    # 6 项：worker 播种、prefetcher 回退、评估统计与结果落盘
+```
+
+**已知遗留**：`configs/unified_*.yaml` 目前无法被 `--config` 直接加载（`ArgumentManager.map` 不认识 `experiment_name`/`protocol`/`decoder_args`，且 `ConfigManager` 只支持 `--exp <节名>` + `network:` 引用）。本文档命令统一改用 `configs/exp.yaml --exp <name>` 写法；打通扁平配置留作后续独立改动。
+
+
 
 #### 文件 1: `core/pipeline/single.py`
 **目标**: 集成样本统计到训练/评估循环
@@ -193,7 +212,7 @@ python scripts/check_protocol_compliance.py core/configs/unified_phoenix2014.yam
 # 3. 冒烟测试（1 epoch，默认配置）
 cd core
 python main.py \
-    --config configs/unified_phoenix2014.yaml \
+    --config configs/exp.yaml --exp baseline \
     --num_epoch 1 \
     --work-dir /tmp/smoke_test
 
@@ -202,7 +221,7 @@ python main.py \
 # === 阶段 2: Worker 配置优化 ===
 # 测试不同 worker 数量对性能的影响
 for workers in 0 2 4 8; do
-    python main.py --config configs/unified_phoenix2014.yaml \
+    python main.py --config configs/exp.yaml --exp baseline \
         --num-worker $workers \
         --num_epoch 1 \
         --work-dir /tmp/benchmark_w${workers}
@@ -215,14 +234,19 @@ done
 # - IO 等待时间
 
 # === 阶段 3: 数据类型测试 ===
+# 注意:命令行 --feeder-args 是“整体覆盖”而非“合并”,必须传完整字典;
+# 只传 {"datatype": "video"} 会让其它 feeder 参数退回 parser 默认值。
+# 也可以选择直接改 configs/exp.yaml 里对应实验节的 feeder_args。
+FEEDER_COMMON='"mode": "train", "num_gloss": -1, "drop_ratio": 1.0, "frame_interval": 1, "image_scale": 1.0, "cache_file_lists": true, "cache_features": true, "precache_file_lists": false'
+
 # 测试 memmap vs JPEG
-python main.py --config configs/unified_phoenix2014.yaml \
-    --feeder-args '{"datatype": "memmap"}' \
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"memmap\", \"gpu_augment\": true}" \
     --num_epoch 1 \
     --work-dir /tmp/test_memmap
 
-python main.py --config configs/unified_phoenix2014.yaml \
-    --feeder-args '{"datatype": "video"}' \
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"video\", \"gpu_augment\": true}" \
     --num_epoch 1 \
     --work-dir /tmp/test_jpeg
 
@@ -231,28 +255,28 @@ python main.py --config configs/unified_phoenix2014.yaml \
 python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
 nvidia-smi  # 检查驱动版本
 
-# 启用 GPU augment + prefetch
-python main.py --config configs/unified_phoenix2014.yaml \
-    --gpu-augment true \
+# 启用 GPU augment + prefetch(gpu_augment 属 feeder_args,见阶段 3 的完整字典)
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"memmap\", \"gpu_augment\": true}" \
     --gpu-prefetch true \
     --num_epoch 1 \
     --work-dir /tmp/test_gpu_accel
 
 # 对比关闭 GPU 加速的性能
-python main.py --config configs/unified_phoenix2014.yaml \
-    --gpu-augment false \
+python main.py --config configs/exp.yaml --exp baseline \
+    --feeder-args "{$FEEDER_COMMON, \"datatype\": \"memmap\", \"gpu_augment\": false}" \
     --gpu-prefetch false \
     --num_epoch 1 \
     --work-dir /tmp/test_cpu_baseline
 
 # === 阶段 5: Length Bucketing（可选）===
 # 仅在不需要严格复现采样顺序时使用
-python main.py --config configs/unified_phoenix2014.yaml \
+python main.py --config configs/exp.yaml --exp baseline \
     --length-bucket-size 4 \
     --num_epoch 1 \
     --work-dir /tmp/test_bucket_4
 
-python main.py --config configs/unified_phoenix2014.yaml \
+python main.py --config configs/exp.yaml --exp baseline \
     --length-bucket-size 8 \
     --num_epoch 1 \
     --work-dir /tmp/test_bucket_8
@@ -451,8 +475,8 @@ class BaselineSearch:
 - [x] 注册表系统和验证器
 - [x] 样本统计和结果汇总
 - [x] 数据加速功能实现（VideoDataset + GPU 路径 + DataLoader 优化）
-- [ ] 代码集成完成（3 个文件）
-- [ ] 服务器验证通过
+- [x] 代码集成完成（3 个文件，本地 CPU 测试 `core/tests/test_stats_integration.py` 通过）
+- [ ] 服务器验证通过（需 GPU）
 - [ ] 数据加速调优完成（确定最优配置）
 
 ### 5.2 Agent Harness
@@ -480,7 +504,7 @@ class BaselineSearch:
 | 阶段 | 日期 | 任务 | 状态 |
 |------|------|------|------|
 | Day 1 | 9/3-9/9 | Priority 1-4 基础设施 | ✅ 90% |
-| Day 2-3 | 9/10-9/11 | 代码集成 + 服务器验证 | ⏳ 进行中 |
+| Day 2-3 | 9/10-9/11 | 代码集成 ✅ + 服务器验证 | ⏳ 进行中 |
 | Day 4-10 | 9/12-9/18 | 数据加速验证与调优 | ⏳ 待开始 |
 | Day 11-22 | 9/19-9/30 | Priority 5 baseline + Agent Tier 1 | ⏳ 待开始 |
 | Day 23-32 | 10/1-10/10 | Priority 6 实验矩阵 + Agent Tier 2 | ⏳ 待开始 |
@@ -492,8 +516,8 @@ class BaselineSearch:
 ## 七、下一步行动
 
 ### 立即执行（今天）
-1. 完成 3 个文件的代码集成
-2. 运行本地测试验证导入无错误
+1. ~~完成 3 个文件的代码集成~~ ✅ 已完成（见 §1.1）
+2. ~~运行本地测试验证导入无错误~~ ✅ `core/tests/test_stats_integration.py`（需完整环境时用 GPU 服务器上的 conda 环境）
 3. 删除冗余文档，更新 CLAUDE.md
 
 ### 明天

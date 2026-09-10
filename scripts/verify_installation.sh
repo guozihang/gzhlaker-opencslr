@@ -95,7 +95,17 @@ else
 fi
 echo ""
 
-# 8. 总结
+# 8. 样本统计 / 结果汇总集成测试（纯 CPU，无 GPU 与数据集）
+echo "Step 8: Running stats integration test..."
+if [ -f "core/tests/test_stats_integration.py" ]; then
+    (cd core && python tests/test_stats_integration.py) \
+        || { echo -e "${RED}✗ Stats integration test failed${NC}"; exit 1; }
+else
+    echo -e "  ${YELLOW}⚠ Test file not found, skipping${NC}"
+fi
+echo ""
+
+# 9. 总结
 echo "=================================="
 echo "Verification Summary"
 echo "=================================="
@@ -105,7 +115,7 @@ echo "Next steps:"
 echo "  1. Prepare your dataset (see docs/dataset_preparation.md)"
 echo "  2. Run a smoke test:"
 echo "     cd core"
-echo "     python main.py --config configs/unified_phoenix2014.yaml --num_epoch 1 --work-dir /tmp/smoke_test"
+echo "     python main.py --config configs/exp.yaml --exp baseline --num_epoch 1 --work-dir /tmp/smoke_test"
 echo "  3. Check the documentation:"
 echo "     - README.md for quick start"
 echo "     - INSTALL.md for detailed installation"
