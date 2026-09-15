@@ -5,24 +5,15 @@ import faulthandler
 import time
 from collections import OrderedDict
 faulthandler.enable()
-import random
-import numpy as np
 import torch
 import torch.nn as nn
 from .log_manager import LogManager
 from .dataloader_manager import DataloaderManager
 from .module_manager import ModuleManager
 from .device_manager import DeviceManager
-from pipline.single import seq_train, seq_eval
-from models.keys import Keys
-
-# 导入新的 seed 管理工具
-try:
-    from utils.seed_utils import set_seed, get_rng_state, set_rng_state
-    SEED_UTILS_AVAILABLE = True
-except ImportError:
-    SEED_UTILS_AVAILABLE = False
-    print("Warning: seed_utils not available, using legacy seed management")
+from pipeline.single import seq_train, seq_eval
+from models import Keys
+from utils.seed_utils import set_seed, get_rng_state, set_rng_state
 
 class ExperimentManager:
     """实验管理器。
@@ -60,72 +51,31 @@ class ExperimentManager:
         """初始化随机种子。
 
         如果配置了 random_fix，则固定 Torch、NumPy、Python 内置随机数
-        生成器的种子，确保实验结果可复现。
+        生成器的种子，确保实验结果可复现。DDP 下各 rank 使用不同但确定的种子。
 
-        优先使用新的 seed_utils 模块（如果可用），否则使用旧的实现。
+        注意 set_seed 内部按 seed + rank 派生实际种子，所以这里传基础 seed。
         """
         if not cls.arg.random_fix:
             return
-
-        seed = cls.arg.random_seed
-        rank = DeviceManager.rank
-
-        if SEED_UTILS_AVAILABLE:
-            # 使用新的 seed 管理工具
-            set_seed(seed, rank, deterministic=True)
-        else:
-            # 使用旧的实现（向后兼容）
-            effective_seed = seed + rank
-            torch.set_num_threads ( 1 )
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-            torch.manual_seed ( effective_seed )
-            torch.cuda.manual_seed_all ( effective_seed )
-            np.random.seed ( effective_seed )
-            random.seed ( effective_seed )
+        set_seed(cls.arg.random_seed, DeviceManager.rank, deterministic=True)
 
     @classmethod
     def save_rng_state(cls):
-        """保存当前随机数生成器状态。
-
-        分别保存 Torch、CUDA、NumPy、Python 内置随机数生成器的状态，
-        用于断点续训时恢复随机数序列。
+        """保存当前随机数生成器状态，供断点续训恢复随机数序列。
 
         Returns:
-            dict: 包含各随机数生成器状态的字典
+            dict: 包含 torch / cuda / numpy / python 状态的字典
         """
-        if SEED_UTILS_AVAILABLE:
-            return get_rng_state()
-        else:
-            # 旧实现（向后兼容）
-            rng_dict = {}
-            rng_dict["torch"] = torch.get_rng_state()
-            rng_dict["cuda"] = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-            rng_dict["numpy"] = np.random.get_state()
-            rng_dict["random"] = random.getstate()
-            return rng_dict
+        return get_rng_state()
 
     @classmethod
     def set_rng_state(cls, rng_dict):
-        """恢复随机数生成器状态。
-
-        从保存的状态字典中恢复 Torch、CUDA、NumPy、Python 内置
-        随机数生成器的状态，用于断点续训。
+        """恢复随机数生成器状态（断点续训用）。
 
         Args:
-            rng_dict: 包含各随机数生成器状态的字典
+            rng_dict: 由 save_rng_state 产出的状态字典
         """
-        if SEED_UTILS_AVAILABLE:
-            set_rng_state(rng_dict)
-        else:
-            # 旧实现（向后兼容）
-            # 断点续训时 checkpoint 经 map_location=output_device 加载,rng 张量会被
-            # 迁到 GPU 上,而 torch.set_rng_state 只接受 CPU 的 ByteTensor,故显式 .cpu()。
-            torch.set_rng_state(rng_dict["torch"].cpu())
-            if rng_dict.get("cuda") is not None and torch.cuda.is_available():
-                torch.cuda.set_rng_state_all([s.cpu() for s in rng_dict["cuda"]])
-            np.random.set_state(rng_dict["numpy"])
-            random.setstate(rng_dict["random"])
+        set_rng_state(rng_dict)
 
     @classmethod
     def init_module( cls ):
@@ -351,28 +301,23 @@ class ExperimentManager:
                     LogManager.info('Successfully Remove Weights: {}.'.format(w))
                 else:
                     LogManager.info('Can Not Remove Weights: {}.'.format(w))
-        weights = cls.modified_weights(state_dict, False)
+        weights = cls.modified_weights(state_dict)
         model_to_load = model.module if hasattr(model, 'module') else model
         model_to_load.load_state_dict(weights, strict=True)
 
     @staticmethod
-    def modified_weights(state_dict, modified=False):
-        """修改模型权重的键名，移除 DDP/DataParallel 添加的 'module.' 前缀。
+    def modified_weights(state_dict):
+        """移除权重键名中 DDP/DataParallel 添加的 'module.' 前缀。
 
         Args:
             state_dict: 原始状态字典
-            modified: 是否进行额外修改（默认 False）
 
         Returns:
-            OrderedDict: 修改后的状态字典
+            OrderedDict: 键名归一后的状态字典
         """
-        state_dict = OrderedDict([
+        return OrderedDict([
             (k.replace('module.', ''), v) for k, v in state_dict.items()
         ])
-        if not modified:
-            return state_dict
-        modified_dict = dict()
-        return modified_dict
 
     @classmethod
     def load_checkpoint_weights(cls, model, optimizer):

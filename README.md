@@ -1,4 +1,4 @@
-OpenCSLR: A Unified Framework for Continuous Sign Language Recognition
+# OpenCSLR: A Unified Framework for Continuous Sign Language Recognition
 
 [![Python](https://img.shields.io/badge/Python-3.7-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8%2B-red)](https://pytorch.org/)
@@ -9,12 +9,12 @@ OpenCSLR: A Unified Framework for Continuous Sign Language Recognition
 
 **OpenCSLR** is a unified, modular, and reproducible framework for continuous sign language recognition (CSLR) research. Unlike traditional toolboxes that simply aggregate models, OpenCSLR provides a **standardized experimental infrastructure** that enables:
 
-- **Fair component comparison**: Compare backbones, temporal modules, losses, and decoders under identical data protocols
+- **Fair component comparison**: Compare backbones, temporal modules, losses, and decoders under identical data conventions
 - **Efficiency-accuracy tradeoffs**: Systematic analysis of model parameters, GPU memory, training throughput, and inference speed
 - **Cross-dataset transfer**: Evaluate generalization with unified interfaces across Phoenix2014, Phoenix2014-T, and CSL-Daily
 - **Low-cost extensibility**: Add new models without modifying core training logic through a registry-based architecture
 
-This framework prioritizes **deterministic reproducibility** with fixed seeds and unified protocols, making it ideal for controlled experiments and ablation studies.
+This framework prioritizes **deterministic reproducibility** with fixed seeds and one shared set of conventions, making it ideal for controlled experiments and ablation studies.
 
 ## Key Features
 
@@ -22,12 +22,12 @@ This framework prioritizes **deterministic reproducibility** with fixed seeds an
 - **Fixed seed reproducibility**: Deterministic training with unified random state across Python, NumPy, PyTorch, CUDA, and DataLoaders
 - **Standardized preprocessing**: Consistent video decoding, frame sampling, resize, crop, and normalization
 - **Unified evaluation**: Identical gloss vocabulary, decoder settings, and WER calculation across all models
-- **Two-protocol support**: `unified` for fair comparison, `official` for original paper reproduction
+- **No protocol switch**: 统一性是默认且唯一的行为,配置里没有 `unified` / `official` 开关
 
 ### Modular Architecture
 - **Registry-based design**: Add models, backbones, temporal modules, losses, and decoders without modifying core code
 - **Container system**: Four-stage pipeline (spatial → temporal → loss → decoder) with standardized I/O contracts
-- **Configuration-driven**: All components selected via YAML configs with validation and compatibility checks
+- **Configuration-driven**: All components selected via YAML configs, with key/type validation before training starts
 
 ### Supported Models & Datasets
 - **Models**: SlowFast, TLP, VAC, CorrNet, SEN, and extensible to new architectures
@@ -36,30 +36,8 @@ This framework prioritizes **deterministic reproducibility** with fixed seeds an
 
 ### Efficient Training Pipeline
 - **Accelerated data loading**: Memory-mapped video, GPU augmentation, CUDA prefetching, and persistent workers
-- **Error resilience**: Continue training on data errors, log missing samples, and maintain valid sample manifests
+- **Error resilience**: Continue training on data errors, log skipped/failed samples, and record per-run sample statistics
 - **Experiment tracking**: Weights & Biases integration, checkpoint management, and watchdog scripts
-
-## Project Structure
-
-```
-OpenSLR/
-├── core/                 # Main source code
-│   ├── main.py           # Program entry point
-│   ├── manager/          # Manager components
-│   │   ├── argument_manager.py
-│   │   ├── config_manager.py
-│   │   ├── experiment_manager.py
-│   │   └── ...
-│   ├── models/           # Model architectures
-│   │   ├── build_function.py
-│   │   ├── modules/
-│   │   └── senmodules/
-│   ├── dataset/          # Dataset loaders
-│   ├── libs/             # External libraries and utilities
-│   ├── configs/          # Configuration files
-│   └── preprocess/       # Data preprocessing scripts
-└── docs/                 # Documentation
-```
 
 ## Installation
 
@@ -101,7 +79,11 @@ pip install -r requirements.txt
 - **RAM**: ≥16GB
 - **Disk**: ≥50GB for datasets
 
-For detailed installation instructions, troubleshooting, and system-specific setup, see **[INSTALL.md](INSTALL.md)**.
+安装后可在仓库根目录运行自检脚本,它会检查依赖、配置文件与核心模块导入:
+
+```bash
+bash scripts/verify_installation.sh
+```
 
 ## Quick Start
 
@@ -120,23 +102,26 @@ Supported datasets: `phoenix2014`, `phoenix2014t`, `csl-daily`
 
 ### 2. Training
 
-Train a model using the unified protocol:
+Train a model:
 
 ```bash
 cd core
 python main.py \
-    --config configs/baseline.yaml \
+    --config configs/exp.yaml \
+    --exp baseline \
     --work-dir ./work_dir/slowfast_phoenix14 \
-    --dataset phoenix2014 \
     --device 0,1
 ```
 
 Key arguments:
-- `--config`: Experiment configuration file
+- `--config`: Experiment configuration file (default `configs/exp.yaml`)
+- `--exp`: Experiment section name inside `--config` (`baseline` / `tlp` / `vac` / `corrnet`)
 - `--work-dir`: Output directory for checkpoints and logs
-- `--dataset`: Dataset name (sets vocab and paths automatically)
-- `--device`: GPU IDs (comma-separated for multi-GPU)
-- `--seed`: Random seed (default: 0, for reproducibility)
+- `--device`: GPU IDs (comma-separated for multi-GPU), or `none` for CPU
+- `--random-seed`: Random seed (default: 0, for reproducibility)
+
+`--config` 指向的实验节通过 `network: <name>` 引用 `configs/network.yaml` 中的网络配置；
+数据集路径与评测语料由 `--dataset` 在 `configs/dataset.yaml` 中选取。
 
 ### 3. Evaluation
 
@@ -144,48 +129,38 @@ Evaluate a trained model on the test set:
 
 ```bash
 python main.py \
-    --config configs/baseline.yaml \
+    --config configs/exp.yaml \
+    --exp baseline \
     --phase test \
-    --load-weights ./work_dir/slowfast_phoenix14/best_model.pt \
-    --dataset phoenix2014 \
+    --load-weights ./work_dir/slowfast_phoenix14_best_model.pt \
     --device 0
 ```
 
-Results are saved to `work_dir/evaluation_results.json` with WER metrics and sample statistics.
+Results are written to `work_dir`:
+- `experiment_result.json`（test）/ `experiment_result_dev.json`（dev）— WER 与样本统计
+- `sample_statistics_{dev,test}.json` — 逐样本的成功 / 跳过 / 失败明细
 
-## Experimental Protocols
+## Experimental Conventions
 
-OpenCSLR supports two experimental protocols to balance fair comparison and original reproduction:
+为保证跨模型可比，所有主实验遵循同一套约定。这些约定由配置与代码保证，
+没有单独的 "protocol" 开关——统一性是默认且唯一的行为。
 
-### Unified Protocol (Default)
+- **Fixed global seed**: 由 `random_seed` 固定 Python / NumPy / PyTorch / CUDA 的随机状态
+- **Standardized preprocessing**: 各实验共用同一套视频解码、抽帧、resize/crop、归一化路径
+- **Unified vocabulary**: 每个数据集的 gloss→index 映射来自同一份 `gloss_dict.npy`
+- **Consistent decoding**: `decode_mode`（greedy / beam）在 `network.yaml` 的网络节中统一指定
+- **Identical WER calculation**: 所有实验走同一个 `EvaluationManager` 与 groundtruth STM
 
-Used for **all main experiments** to ensure fair comparison across models:
-
-- **Fixed global seed**: Deterministic results with unified random state (Python, NumPy, PyTorch, CUDA)
-- **Standardized preprocessing**: Identical video decoding, frame sampling, resize/crop, normalization
-- **Unified vocabulary**: Same gloss-to-index mapping across all models for each dataset
-- **Consistent decoding**: Standardized greedy/beam search settings and text post-processing
-- **Identical WER calculation**: Same evaluation script and metrics across all experiments
-
-**Usage**: Default behavior, no special flags needed.
-
-### Official Protocol
-
-Preserves original paper settings for models with specialized preprocessing or decoders:
-
-- Matches original data augmentation, sampling strategies, and label processing
-- Used for reproduction verification only
-- Results reported separately in supplementary materials
-
-**Usage**: Set `protocol: official` in config or use `--protocol official`
+复现论文原始设置时，在同一套约定下按需调整该实验节的 `feeder_args` /
+`model_args`，并在结果表中注明差异。
 
 ### Important Notes
 
-1. **Single-seed policy**: All experiments use a single fixed seed for deterministic reproduction. Results are **not** intended for statistical significance testing or confidence intervals.
+1. **Single-seed policy**: 所有实验使用单个固定种子做确定性复现，结果**不用于**统计显著性检验或置信区间估计。
 
-2. **Sample validity tracking**: Each experiment records total samples, successful predictions, skipped samples (missing data), and failures. Experiments with >5% skipped samples are marked `invalid`.
+2. **Sample validity tracking**: 每次评估记录总样本数、成功数、跳过数（数据缺失等）与失败数。跳过率超过 5% 的实验被标记为 `invalid`——否则 WER 会因为少算了一批难样本而虚高。
 
-3. **Result labeling**: All reported results must clearly indicate which protocol was used. **Never mix protocols** in the same table or comparison.
+3. **Result labeling**: 结果表中必须注明网络配置与解码设置，**不要**在同一张表里混用不同设置的结果。
 
 ## Supported Models & Datasets
 
@@ -214,19 +189,19 @@ All models implemented with unified four-container architecture:
 
 ## Performance Baselines
 
-Results under **unified protocol** with fixed seed for reproducibility:
+Single-seed results with fixed seed for reproducibility:
 
 ### Phoenix2014
 
-| Model | Dev WER (%) | Test WER (%) | Params (M) | Protocol |
-|-------|-------------|--------------|------------|----------|
-| VAC + SMKD | 19.9 | 21.3 | - | unified |
-| SEN | 19.9 | 19.8 | - | unified |
-| CorrNet | 20.2 | 20.6 | - | unified |
-| TLP | 20.2 | 20.8 | - | unified |
-| SlowFast | 21.8 | 21.5 | - | unified |
+| Model | Dev WER (%) | Test WER (%) | Params (M) |
+|-------|-------------|--------------|------------|
+| VAC + SMKD | 19.9 | 21.3 | - |
+| SEN | 19.9 | 19.8 | - |
+| CorrNet | 20.2 | 20.6 | - |
+| TLP | 20.2 | 20.8 | - |
+| SlowFast | 21.8 | 21.5 | - |
 
-**Note**: These are single-seed results intended for deterministic reproduction and system comparison, not for estimating run variance or statistical significance. Official protocol results are available in supplementary materials.  
+**Note**: These are single-seed results intended for deterministic reproduction and system comparison, not for estimating run variance or statistical significance.
 
 
 ## Configuration System
@@ -235,99 +210,138 @@ OpenCSLR uses a three-tier YAML configuration system:
 
 ### Example: Training SlowFast on Phoenix2014
 
+配置分三层:exp 配置按**实验名**分节,每个实验用 `network:` 引用 network 配置
+中按**网络名**分节的网络定义;数据集则由 `--dataset` 在 `dataset.yaml` 中选取。
+
 ```yaml
-# configs/slowfast_phoenix14.yaml
+# core/configs/exp.yaml —— 实验节,按实验名组织
+_common_experiment: &common_experiment   # YAML 锚点,复用公共字段
+    feeder: dataset.dataloader_video.VideoDataset
+    phase: train
+    num_epoch: 80
+    batch_size: 2
+    random_seed: 0
+    num_worker: 8
+    persistent_workers: true
 
-# Dataset
-dataset: phoenix2014
-feeder: dataset.dataloader_video.VideoDataset
-feeder_args:
-    datatype: video  # Options: video, lmdb, memmap, features
-    cache_file_lists: true
-    gpu_augment: true
-
-# Model
-model: models.build_function.build_slowfast
-model_args:
-    num_classes: 1296
-    hidden_size: 1024
-    c2d_type: slowfast101
-
-# Training
-phase: train
-num_epoch: 80
-batch_size: 8
-eval_interval: 1
-save_interval: 5
-
-# Optimization
-optimizer_args:
-    optimizer: Adam
-    base_lr: 0.0001
-    step: [40, 60]
-    weight_decay: 0.0001
-
-# Reproducibility
-seed: 0
-protocol: unified
-
-# Hardware
-device: 0,1
-num_worker: 4
-gpu_prefetch: true
+baseline:
+    <<: *common_experiment
+    network: slowfast          # 引用 network.yaml 中的网络节
+    dataset: phoenix2014       # 选择 dataset.yaml 中的数据集节
+    device: 0,1
+    work_dir: /path/to/work_dir
 ```
+
+```yaml
+# core/configs/network.yaml —— 网络节,按网络名组织
+slowfast:
+    model: slowfast            # models/slowfast.py 中 @register_model("slowfast") 的注册名
+    decode_mode: beam          # greedy 或 beam
+    model_args:
+        num_classes: 1296      # 须等于该数据集 gloss_dict 词表大小 + 1(CTC blank)
+        hidden_size: 1024
+        c2d_type: slowfast101
+    loss_weights:
+        SeqCTC: 1.0
+        Cu: 0.001
+        Cp: 0.001
+        Slow: 1.0
+        Fast: 1.0
+```
+
+实验节的同名键会覆盖网络节的值,因此数据集相关的开关(如 `feeder_args`)写在实验节里。
 
 ### Configuration Validation
 
-The framework automatically validates:
-- Illegal configuration keys
-- Model-dataset vocabulary compatibility
-- Temporal dimension mismatches
-- Decoder-model output compatibility
+`ConfigManager` 在合并 exp 与 network 配置后立即校验,启动前就失败,不浪费 GPU 时间:
 
-Errors are reported **before training starts**, saving GPU time.
+- 嵌套节的未知键(疑似拼写错误)与值类型
+- `random_seed` 为非负整数、`optimizer_args.base_lr` 为正数
+- `optimizer_args.optimizer` 在受支持列表内
+- `persistent_workers` 需要 `num_worker > 0`
+
+需要运行时信息才能判定的检查不在这里。例如 `model_args.num_classes` 与实际
+`gloss_dict` 词表大小是否一致,由 `DatasetManager` 读表后自行校验。
 
 ## Extending OpenCSLR
 
 ### Adding a New Model
 
-OpenCSLR's registry system allows adding models without modifying core code:
+一个模型就是一个文件。框架（`Keys`、`Container`、`SignLanguageModel`、注册表）都在
+`core/models/__init__.py` 里，通用积木在 `core/modules/`，你只需要新写一个文件。
 
-**Step 1**: Implement your model inheriting from `SignLanguageModel`
+分工原则：`core/modules/` 只放**可复用的东西**，按用途分四类，**每类目录里只放
+该类相关的**——`spatio/` 放空间网络、`temporal/` 放时序网络、
+`losses/` 放**最小单元损失**（`CTCLoss`、`SeqKD`）、`decoders/` 放通用 `Decoder`；
+不属于任何一类的辅助积木（`Identity`、`Classifier`、`NormLinear`、`TemporalLiftPooling`）
+一律进 `others/`。
+**模型专有的组装**（本模型怎么组合这些单元、怎么取哪个 key）写在该模型自己的文件里，
+别的模型不跟着变。
+
+**Step 1**: 新建 `core/models/my_model.py`，定义本模型的损失，组装四个容器并注册
 
 ```python
 # core/models/my_model.py
-from core.models.base import SignLanguageModel, Container
+import torch.nn as nn
 
-class MyCustomModel(SignLanguageModel):
-    def __init__(self, num_classes, **kwargs):
+from models import Container, Keys, SignLanguageModel, register_model, require
+from modules import BiLSTM, CTCLoss, Classifier, Decoder, ResNet, SeqKD, TemporalConv1D
+
+
+class MyModelLoss(nn.Module):
+    """本模型的损失:把最小单元按 loss_weights 加权组合起来。"""
+
+    def __init__(self, loss_weights):
         super().__init__()
-        # Define your four containers
-        self.spatial_module_container = Container(...)
-        self.temporal_module_container = Container(...)
-        self.loss_module_container = Container(...)
-        self.decoder = Container(...)
+        self.loss_weights = loss_weights
+        self.ctc = CTCLoss()          # 最小单元,来自 modules/losses
+        self.kd = SeqKD(T=8)
+
+    def forward(self, data):
+        require(data, Keys.CONV_LOGITS, Keys.SEQUENCE_LOGITS, Keys.LABEL,
+                Keys.FEAT_LEN, Keys.LABEL_LGT, who="MyModelLoss")
+        loss, total_loss = 0, {}
+        for key, weight in self.loss_weights.items():
+            if key == "SeqCTC":
+                total_loss["SeqCTC"] = weight * self.ctc(data[Keys.SEQUENCE_LOGITS], data)
+                loss += total_loss["SeqCTC"]
+            # ...
+        return {Keys.LOSS: loss, Keys.TOTAL_LOSS: total_loss}
+
+
+@register_model("my_model")          # 注册名即 config 中 model: 的取值
+def build_my_model(args, gloss_dict, loss_weights):
+    return SignLanguageModel(
+        spatial_module_container=Container([ResNet(args)]),
+        temporal_module_container=Container([TemporalConv1D(args), BiLSTM(args), Classifier(args)]),
+        loss_module_container=Container([MyModelLoss(loss_weights)]),
+        decoder=Decoder(args, gloss_dict),
+    )
 ```
 
-**Step 2**: Register the model builder
+如果本模型的解码要取别的 key（像 SlowFast 那样），同样在这个文件里继承
+`Decoder` 覆盖 `__call__`——见 `core/models/slowfast.py` 的 `SlowFastDecoder`。
+
+**Step 2**: 在 `core/models/__init__.py` 末尾把它加进 import 列表
 
 ```python
-# core/models/build_function.py
-from core.models.registry import register_model
-
-@register_model
-def build_my_model(num_classes, **kwargs):
-    return MyCustomModel(num_classes=num_classes, **kwargs)
+from . import corrnet, my_model, sen, slowfast, tlp, vac
 ```
 
-**Step 3**: Create a config file
+导入即触发 `@register_model`，注册表随之填充，不需要改任何工厂分支。
+四个容器的契约见 `core/models/__init__.py` 的 `SignLanguageModel`：每个子模块的
+`forward` 接收并返回同一个 data dict（原地更新），按"空间→时序→损失→解码"执行。
+
+**Step 3**: Reference the registered name from a network section
 
 ```yaml
-# configs/my_model.yaml
-model: models.build_function.build_my_model
-model_args:
-    num_classes: 1296
-    # your custom args
+# core/configs/network.yaml —— 新增一节,exp.yaml 里用 network: my_model 引用
+my_model:
+  model: my_model                   # 与 @register_model("my_model") 对应
+  decode_mode: beam
+  model_args:
+      num_classes: 1296
+      # your custom args
 ```
 
 **That's it!** No changes to `main.py` or training logic needed.
@@ -408,25 +422,22 @@ length_bucket_size: 0  # Set to 4 or 8 to enable bucketing
 Built-in Weights & Biases integration:
 
 ```bash
-python main.py --config configs/baseline.yaml --wandb
+python main.py --config configs/exp.yaml --exp baseline --wandb
 ```
 
 Tracks: loss curves, WER per epoch, GPU memory, learning rate, sample statistics, and checkpoints.
 
 ## Documentation
 
-Full documentation (coming soon):
-- **Installation Guide**: [INSTALL.md](INSTALL.md)
-- **Dataset Preparation**: `docs/dataset_preparation.md`
-- **Training Guide**: `docs/training.md`
-- **Model Extension Guide**: `docs/extending_models.md`
-- **API Reference**: `docs/api/`
+- **实验约定**: [docs/PROTOCOLS.md](docs/PROTOCOLS.md)
+- **API Reference**: `docs/source/api/`,由源码注释自动生成
+- **安装自检**: `bash scripts/verify_installation.sh`
 
 Build docs locally:
 ```bash
 cd docs
-make gen-api  # Generate API docs from code
-make html     # Build HTML documentation
+make gen-api  # 从 core/ 源码注释生成 API 页
+make html     # 构建 HTML 文档
 ```
 
 ## Project Structure
@@ -437,27 +448,36 @@ OpenCSLR/
 │   ├── main.py                # Entry point
 │   ├── manager/               # Manager components
 │   │   ├── argument_manager.py
-│   │   ├── config_manager.py
+│   │   ├── config_manager.py  # 配置加载 + 校验
 │   │   ├── experiment_manager.py
 │   │   ├── evaluation_manager.py
 │   │   ├── dataloader_manager.py
+│   │   ├── cuda_prefetcher.py
 │   │   └── device_manager.py
-│   ├── models/                # Model implementations
-│   │   ├── base.py            # SignLanguageModel base class
-│   │   ├── registry.py        # Model registry
-│   │   ├── build_function.py  # Model builders
-│   │   └── modules/           # Model components
+│   ├── models/                # 模型层：一个模型一个文件
+│   │   ├── __init__.py        # Keys + Container/SignLanguageModel + 注册表
+│   │   ├── tlp.py             # 各模型的 build_* 构建函数
+│   │   ├── sen.py
+│   │   ├── vac.py
+│   │   ├── corrnet.py
+│   │   └── slowfast.py
+│   ├── modules/               # 共用积木：四类目录各放各的，辅助的统一进 others/
+│   │   ├── spatio/            #   空间网络（ResNet/SENresnet/corrnet_resnet/SlowFast）
+│   │   │                      #   + slowfast_modules/（vendored，整块不可拆）
+│   │   ├── temporal/          #   时序网络（BiLSTM/tconv/CorrNet_TemporalConv1D 等）
+│   │   ├── losses/            #   最小单元损失（CTCLoss/SeqKD）
+│   │   ├── decoders/          #   解码（Decoder）
+│   │   └── others/            #   辅助积木（Identity/Classifier/NormLinear）
+│   │                          #   + liftpool.py（TemporalLiftPooling/Local_Weighting）
 │   ├── dataset/               # Dataset loaders
-│   │   ├── dataloader_video.py
-│   │   └── transforms.py
-│   ├── libs/                  # Utilities
+│   │   └── dataloader_video.py
+│   ├── libs/                  # Vendored libraries
 │   │   ├── pysclite/          # Pure Python WER calculator
-│   │   ├── gpu_video_augmentation.py
-│   │   └── cuda_prefetcher.py
+│   │   └── gpu_video_augmentation.py
 │   ├── configs/               # Configuration files
-│   │   ├── exp.yaml           # Experiment configs
-│   │   ├── network.yaml       # Model configs
-│   │   └── dataset.yaml       # Dataset configs
+│   │   ├── exp.yaml           # 实验配置(按实验名分节)
+│   │   ├── network.yaml       # 网络配置(按网络名分节)
+│   │   └── dataset.yaml       # 数据集配置
 │   ├── pipeline/              # Training/evaluation loops
 │   │   └── single.py
 │   └── preprocess/            # Data preprocessing
@@ -465,10 +485,12 @@ OpenCSLR/
 ├── script/                    # Helper scripts
 │   ├── run.sh                 # Training wrapper
 │   └── train_watchdog.sh      # Auto-restart on crash
+├── scripts/                   # Verification scripts
+│   ├── verify_installation.sh
+│   └── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
 ├── docs/                      # Documentation
 ├── requirements.txt           # Pip dependencies
 ├── environment.yml            # Conda environment
-├── INSTALL.md                 # Installation guide
 └── README.md                  # This file
 ```
 
@@ -479,7 +501,7 @@ Contributions are welcome! Please:
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/YourFeature`)
 3. Follow the existing code style and add tests if applicable
-4. Ensure all models still work under unified protocol
+4. Ensure all models still train and evaluate under the shared conventions
 5. Update documentation for user-facing changes
 6. Submit a pull request with a clear description
 
@@ -525,4 +547,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
+版本历史见 `git log`。

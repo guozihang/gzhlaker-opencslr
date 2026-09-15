@@ -11,13 +11,16 @@ OpenSLR is a modular Continuous Sign Language Recognition (CSLR) toolbox built o
 ### Training
 ```bash
 cd core
-python main.py --config configs/baseline.yaml --work-dir ./work_dir/my_experiment
+python main.py --config configs/exp.yaml --exp baseline --work-dir ./work_dir/my_experiment
 ```
+`--exp` selects a section of `configs/exp.yaml`; that section's `network:` key selects a section of `configs/network.yaml`, and `dataset:` selects a section of `configs/dataset.yaml`. These three files are the only config entry points — always start from `configs/exp.yaml` with `--exp <name>`.
 
 ### Testing / Evaluation
 ```bash
-python main.py --config configs/baseline.yaml --phase test --load-weights ./work_dir/my_experiment/best_model.pt
+python main.py --config configs/exp.yaml --exp baseline --phase test \
+  --load-weights ./work_dir/my_experiment_best_model.pt
 ```
+Note the checkpoint path: `work_dir` is used as a *filename prefix* for checkpoints (`{work_dir}_best_model.pt`), but as a *directory* for logs and `experiment_result.json`.
 
 ### Data Preprocessing
 ```bash
@@ -26,22 +29,30 @@ python dataset_preprocess.py --dataset phoenix2014 --dataset-root /path/to/datas
 ```
 
 ### Adding a New Model
-Models are built via factory functions in `core/models/build_function.py`. Each function (e.g., `build_slowfast`, `build_tlp`) instantiates a `SignLanguageModel` with four containers. Then reference it in a config:
+One model = one file. The framework (`Keys`, `Container`, `SignLanguageModel`, the registry) lives in `core/models/__init__.py`; shared building blocks live in `core/modules/`, split by role into `spatio/`, `temporal/`, `losses/`, `decoders/`, with auxiliary blocks (`Identity`, `Classifier`, `NormLinear`) in `others/`. Each category folder holds **only** what belongs to that category — anything that isn't a spatial net / temporal net / loss / decoder goes in `others/`. `core/modules/__init__.py` re-exports all of them, so import from `modules` directly — not from the subfolders.
+
+Add `core/models/your_model.py` with a `build_*` function that instantiates a `SignLanguageModel` from four containers and is registered via `@register_model("your_model")`, then append it to the `from . import ...` list at the bottom of `core/models/__init__.py` (importing populates the registry). Reference that name from a network section:
 ```yaml
-model: models.build_function.build_your_model
+# core/configs/network.yaml
+your_model:
+  model: your_model          # 与 @register_model("your_model") 的注册名一致
+  model_args: {...}
 ```
+Then in `core/configs/exp.yaml` add an experiment with `network: your_model`. `ModuleManager.load()` resolves only registered names — there is no dotted-path fallback.
 
 ## Architecture
 
 ### Initialization Chain (core/main.py)
 The system initializes via a strict chain of static managers (all in `core/manager/`):
-1. `ArgumentManager` — parses CLI args + merges YAML config
-2. `ConfigManager` — loads the experiment YAML
-3. `ArgumentManager.map()` — applies config values to CLI parser defaults
-4. `LogManager` → `DatasetManager` → `CollectManager` → `ModuleManager` → `DataloaderManager` → `DeviceManager` → `ExperimentManager`
+1. `ArgumentManager` — parses CLI args
+2. `ConfigManager` — loads the experiment YAML (exp section + referenced network section) and validates it (unknown keys, types, invalid values); raises on error
+3. `ArgumentManager.map()` — applies config values to CLI parser defaults (CLI > YAML > code defaults)
+4. `DeviceManager` → `LogManager` → `DatasetManager` → `CollectManager` → `ModuleManager` → `DataloaderManager` → `ExperimentManager`
 
-### Model Architecture (core/models/base.py)
-All models inherit from `SignLanguageModel`, which is composed of four `Container` sub-modules executed in order:
+Training/eval loops live in `core/pipeline/single.py` (`seq_train` / `seq_eval`).
+
+### Model Architecture (core/models/__init__.py)
+All models are built as a `SignLanguageModel`, which is composed of four `Container` sub-modules executed in order:
 1. `spatial_module_container` — processes individual frames (e.g., ResNet, SlowFast backbone)
 2. `temporal_module_container` — models temporal dependencies (e.g., TemporalConv1D, BiLSTM)
 3. `loss_module_container` — computes losses (CTC-based)

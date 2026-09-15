@@ -2,7 +2,11 @@
 """OpenCSLR 配置管理器模块。
 
 负责加载实验配置:从 exp 配置文件中按实验名取节,再按该实验引用的
-网络名从 network.yaml 取网络配置,两者合并为全局配置数据。
+网络名从 network.yaml 取网络配置,两者合并为全局配置数据,并在合并后
+校验配置本身(未知键、类型、非法取值)。
+
+需要运行时信息才能判定的检查不在这里,例如 ``model_args.num_classes``
+与实际 gloss_dict 词表大小的一致性由 DatasetManager 读表后自行校验。
 """
 
 import os
@@ -31,6 +35,8 @@ class ConfigManager:
             "image_scale", "skip_fileids", "skip_indices", "skip_info_path",
             "allowable_vid_length", "limit_len", "cache_file_lists",
             "cache_features", "precache_file_lists", "gpu_augment",
+            # 评估期行为开关,由 pipeline.single.seq_eval 读取
+            "max_eval_frames", "skip_failed_eval_batches",
         },
         "optimizer_args": {
             "optimizer", "base_lr", "step", "learning_ratio", "weight_decay",
@@ -62,6 +68,8 @@ class ConfigManager:
         "wandb": {"enable": bool, "project": str, "entity": str},
     }
 
+    VALID_OPTIMIZERS = {"SGD", "Adam"}
+
     @classmethod
     def init(cls):
         """初始化配置管理器,加载 exp 与 network 配置并合并。"""
@@ -70,13 +78,16 @@ class ConfigManager:
 
     @classmethod
     def _validate(cls, data):
-        """校验合并后的配置中嵌套节的键是否合法。
+        """校验合并后的配置:嵌套节的键、类型,以及启动前就能判定的取值错误。
+
+        在训练开始前失败,避免带着拼写错误或非法取值浪费 GPU 时间。
 
         Args:
             data: 合并后的配置数据。
 
         Raises:
-            ValueError: 嵌套节出现未知键(疑似拼写错误)时抛出。
+            ValueError: 出现未知键(疑似拼写错误)或非法取值时抛出。
+            TypeError: 配置值类型不符时抛出。
         """
         for section, known in cls.KNOWN_NESTED_KEYS.items():
             value = data.get(section)
@@ -95,6 +106,25 @@ class ConfigManager:
                         f"Invalid type for '{section}.{key}': expected {expected}, "
                         f"got {type(value[key]).__name__}"
                     )
+
+        seed = data.get("random_seed", 0)
+        if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+            raise ValueError(f"random_seed must be a non-negative integer, got {seed!r}")
+
+        optimizer = data.get("optimizer_args", {}).get("optimizer")
+        if optimizer is not None and optimizer not in cls.VALID_OPTIMIZERS:
+            raise ValueError(
+                f"Unsupported optimizer {optimizer!r}. "
+                f"Expected one of {sorted(cls.VALID_OPTIMIZERS)}."
+            )
+
+        base_lr = data.get("optimizer_args", {}).get("base_lr")
+        if base_lr is not None and base_lr <= 0:
+            raise ValueError(f"optimizer_args.base_lr must be positive, got {base_lr}")
+
+        # persistent_workers 只在 num_worker > 0 时被 DataLoader 接受
+        if data.get("persistent_workers") and not data.get("num_worker"):
+            raise ValueError("persistent_workers requires num_worker > 0")
 
     @classmethod
     def load_experiment(cls, config_path):

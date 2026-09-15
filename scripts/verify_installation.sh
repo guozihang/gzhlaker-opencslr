@@ -52,10 +52,11 @@ echo ""
 
 # 5. 检查配置文件
 echo "Step 5: Checking configuration files..."
-if [ -f "core/configs/unified_phoenix2014.yaml" ]; then
+if [ -f "core/configs/exp.yaml" ] && [ -f "core/configs/network.yaml" ] && [ -f "core/configs/dataset.yaml" ]; then
     echo -e "  ${GREEN}✓ Config files found${NC}"
 else
-    echo -e "  ${YELLOW}⚠ Warning: Unified config templates not found${NC}"
+    echo -e "  ${RED}✗ Missing core/configs/{exp,network,dataset}.yaml${NC}"
+    exit 1
 fi
 echo ""
 
@@ -75,28 +76,18 @@ except Exception as e:
 
 try:
     from utils.seed_utils import set_seed
+    from utils.sample_statistics import SampleStatistics
+    from utils.experiment_result import ExperimentResult
     print('  ${GREEN}✓ Utility modules import OK${NC}')
-except ImportError:
-    print('  ${YELLOW}⚠ Utils modules not found (optional)${NC}')
+except ImportError as e:
+    print('  ${RED}✗ Utility import failed: ' + str(e) + '${NC}')
+    sys.exit(1)
 " || { echo -e "${RED}✗ Import test failed${NC}"; exit 1; }
 cd ..
 echo ""
 
-# 7. 验证协议合规性（如果脚本存在）
-echo "Step 7: Validating protocol compliance..."
-if [ -f "scripts/check_protocol_compliance.py" ]; then
-    if [ -f "core/configs/unified_phoenix2014.yaml" ]; then
-        python scripts/check_protocol_compliance.py core/configs/unified_phoenix2014.yaml --no-verbose
-    else
-        echo -e "  ${YELLOW}⚠ Config file not found, skipping${NC}"
-    fi
-else
-    echo -e "  ${YELLOW}⚠ Compliance checker not found, skipping${NC}"
-fi
-echo ""
-
-# 8. 样本统计 / 结果汇总集成测试（纯 CPU，无 GPU 与数据集）
-echo "Step 8: Running stats integration test..."
+# 7. 样本统计 / 结果汇总集成测试（纯 CPU，无 GPU 与数据集）
+echo "Step 7: Running stats integration test..."
 if [ -f "core/tests/test_stats_integration.py" ]; then
     (cd core && python tests/test_stats_integration.py) \
         || { echo -e "${RED}✗ Stats integration test failed${NC}"; exit 1; }
@@ -105,7 +96,7 @@ else
 fi
 echo ""
 
-# 9. 总结
+# 8. 总结
 echo "=================================="
 echo "Verification Summary"
 echo "=================================="
@@ -115,11 +106,10 @@ echo "Next steps:"
 echo "  1. Prepare your dataset (see docs/dataset_preparation.md)"
 echo "  2. Run a smoke test:"
 echo "     cd core"
-echo "     python main.py --config configs/exp.yaml --exp baseline --num_epoch 1 --work-dir /tmp/smoke_test"
+echo "     python main.py --config configs/exp.yaml --exp baseline --num-epoch 1 --work-dir /tmp/smoke_test"
 echo "  3. Check the documentation:"
 echo "     - README.md for quick start"
-echo "     - INSTALL.md for detailed installation"
-echo "     - docs/PROTOCOLS.md for experiment protocols"
+echo "     - docs/PROTOCOLS.md for experimental conventions"
 echo ""
 echo "For support, open an issue at:"
 echo "  https://github.com/immc-lab/OpenCSLR/issues"

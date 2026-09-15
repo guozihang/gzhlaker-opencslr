@@ -42,7 +42,7 @@ python main.py --config configs/exp.yaml --exp "$EXP" "$@"
 #     --batch-size 1 --test-batch-size 1 \
 #     --work-dir /sda/data/guozihang/work_dir/www2026_test_1/
 #
-# 旧指令格式(路径式模型写法仍兼容,模型/数据集也可从配置读):
+# 直接跑(模型/数据集从配置读,--model 只能填注册名,不支持点分路径):
 #   CUDA_VISIBLE_DEVICES=0 python main.py --device 0 \
-#     --model models.build_function.build_slowfast \
+#     --config configs/exp.yaml --exp baseline \
 #     --work-dir /sda/data/renjiawei/slowfast/csl/ --dataset CSL-Daily

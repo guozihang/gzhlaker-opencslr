@@ -109,8 +109,8 @@ from manager.cuda_prefetcher import CUDAPrefetcher  # noqa: E402
 from manager.dataloader_manager import DataloaderManager  # noqa: E402
 from manager.device_manager import DeviceManager  # noqa: E402
 from manager.evaluation_manager import EvaluationManager  # noqa: E402
-from models.keys import Keys  # noqa: E402
-from pipline.single import seq_eval  # noqa: E402
+from models import Keys  # noqa: E402
+from pipeline.single import seq_eval  # noqa: E402
 from utils.sample_statistics import SampleStatistics  # noqa: E402
 
 
@@ -272,7 +272,7 @@ def test_seq_eval_records_successes_and_results():
         assert result["split"] == "dev" and result["dataset"] == "phoenix2014"
         assert result["model"] == "slowfast" and result["decoder"] == "greedy"
         assert result["total_samples"] == 4 and result["successful_samples"] == 4
-        assert result["status"] == "valid" and result["protocol"] == "unified"
+        assert result["status"] == "valid"
         assert result["config_path"] == "configs/exp.yaml"
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

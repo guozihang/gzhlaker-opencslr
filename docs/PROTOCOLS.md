@@ -1,385 +1,148 @@
-# Experimental Protocols Documentation
+# 实验约定 (Experimental Conventions)
 
-This document specifies the experimental protocols used in OpenCSLR for reproducible and fair model comparison.
+本文记录 OpenCSLR 中**实际生效**的实验约定,用于保证跨模型结果可比。
 
-## Overview
+**没有 protocol 开关。** 配置中不存在 `protocol` 字段,也没有 `official` /
+`unified` 两套模式——统一性是默认且唯一的行为。复现论文原始设置时,在同一套
+约定下按需调整该实验节的 `feeder_args` / `model_args`,并在结果表中注明差异。
 
-OpenCSLR supports two experimental protocols:
+## 1. 随机种子
 
-1. **Unified Protocol** (default): Standardized settings for fair comparison across all models
-2. **Official Protocol**: Original paper settings for reproduction verification
+- **配置项**:`random_seed`(默认 `0`),可用 `--random-seed` 覆盖
+- **实现**:`utils/seed_utils.py` 的 `set_seed(seed, rank=0, deterministic=True)`,
+  统一设置 Python `random`、NumPy、PyTorch CPU 与 CUDA 的随机状态
+- **DDP**:按 `seed + rank` 派生各进程种子,保证不同进程不同但确定的随机序列
+- **cuDNN**:`deterministic=True` 时启用确定性模式并关闭 benchmark
+- **DataLoader**:worker 通过 `seed_worker` 获得确定性种子
+- **断点续训**:RNG 状态随 checkpoint 一起保存/恢复
 
-All results must be clearly labeled with their protocol. **Never mix protocols** in the same table or comparison.
+> 单种子结果用于**确定性复现**与**系统对比**,不用于估计方差、统计显著性
+> 或置信区间。
 
-## 1. Unified Protocol
+## 2. 视频与预处理
 
-The unified protocol ensures identical experimental conditions across all models, datasets, and runs.
+- **数据形态**:由 `feeder_args.datatype` 选择 `video`(逐帧 jpg)、`lmdb`、
+  `memmap` 或预抽取特征
+- **memmap 帧尺寸**:`memmap_frame_shape: [256, 256, 3]`,由 `dataset.yaml` 指定
+- **裁剪**:训练用 `video_augmentation.RandomCrop(224)`,评测用
+  `CenterCrop(224)`(`dataset/dataloader_video.py`)
+- **评测期确定性**:评测路径不含随机增强
+- **可用键**:`feeder_args` 允许的键由 `ConfigManager.KNOWN_NESTED_KEYS` 界定,
+  写错键会在启动前报错。常用键包括 `datatype`、`mode`、`frame_interval`、
+  `image_scale`、`drop_ratio`、`cache_file_lists`、`gpu_augment`、`skip_fileids`
 
-### 1.1 Random Seed Management
+## 3. 词表与标签
 
-**Fixed Global Seed**: All experiments use a single, fixed seed for deterministic reproducibility.
+- **来源**:每个数据集一份 `gloss_dict.npy`,路径由 `dataset.yaml` 的
+  `dict_path` 指定(如 `./preprocess/phoenix2014/gloss_dict.npy`)
+- **特殊符号**:CTC blank 为 index `0`
+- **类别数**:`model_args.num_classes` 必须等于
+  `len(gloss_dict) + 1`。该一致性由 `DatasetManager` 读表后校验,不一致直接报错
+- **可比性**:同一数据集下所有模型必须使用同一份 `gloss_dict.npy`,换词表
+  即作废跨模型对比
 
-- **Default seed**: `0`
-- **Configuration**: Set via `seed: 0` in YAML config or `--seed 0` command line
-- **Scope**: Applied to all random number generators in the stack
+## 4. 解码
 
-**Implementation**:
-```python
-# Python built-in random
-import random
-random.seed(seed)
+- **配置项**:`decode_mode`,写在 `configs/network.yaml` 的网络节里
+  (`greedy` 或 `beam`),默认 `beam`
+- **greedy**:逐步 argmax 后按 CTC 规则合并重复与 blank
+- **beam**:CTC prefix beam search,beam 宽度由解码器自身参数决定
+- **结果标注**:解码设置会写进 `decoder` 字段,必须随结果一起报告
 
-# NumPy
-import numpy as np
-np.random.seed(seed)
+## 5. WER 计算
 
-# PyTorch CPU
-import torch
-torch.manual_seed(seed)
+- **实现**:`libs/pysclite`(纯 Python 的 sclite 移植),无外部二进制依赖
+- **流程**:`EvaluationManager` 将预测写成 CTM、与 groundtruth STM 做 DP 对齐,
+  统计替换/插入/删除
+- **语料来源**:`dataset.yaml` 的 `evaluation_dir` 与 `evaluation_prefix`
+  指向的 groundtruth STM(如 `./libs/slr_eval` + `phoenix2014-groundtruth`)
+- **口径**:所有实验走同一个 `EvaluationManager` 与同一份 groundtruth STM
 
-# PyTorch CUDA
-torch.cuda.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)  # Multi-GPU
+## 6. 样本有效性
 
-# cuDNN deterministic mode (may reduce performance)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-```
+每次评测记录总样本数、成功数、跳过数(数据缺失等)与失败数。
 
-**DataLoader Seeding**:
-- Worker processes receive independent but deterministic seeds
-- Sampler initialized with base seed
-- RNG state saved/restored with checkpoints for exact resumption
+- **阈值**:`SKIP_RATE_THRESHOLD = 0.05`。跳过率 > 5% 的实验标记为 `invalid`
+- **理由**:否则 WER 会因为少算了一批难样本而虚高
 
-**Important**: Single-seed results are for **deterministic reproduction** and **system comparison**, not for estimating run variance, statistical significance, or confidence intervals.
+跳过率只在同一份样本集内可比,因此跨模型比较时应确认各实验的
+`skipped_samples` / `failed_samples` 明细一致。
 
-### 1.2 Video Preprocessing
+## 7. 结果落盘
 
-All models use identical video preprocessing pipelines:
+评测结束时在 `work_dir` 写两个文件:
 
-#### Frame Extraction
-- **Format**: Individual JPEG frames or memory-mapped arrays
-- **FPS**: Dataset native frame rate (25 fps for Phoenix, 30 fps for CSL-Daily)
-- **Resolution**: Original resolution preserved during extraction
+**`experiment_result.json`**(test) / **`experiment_result_dev.json`**(dev)
+——由 `utils/experiment_result.py` 的 `ExperimentResult` 序列化:
 
-#### Frame Sampling
-- **Strategy**: Uniform temporal sampling or dataset-specific protocol
-- **Input length**: Fixed per dataset (e.g., 64 frames for SlowFast)
-- **Padding**: Zero-padding or frame repetition for short videos
-
-#### Spatial Preprocessing
-- **Resize**: Shortest side to 256 pixels, preserve aspect ratio
-- **Crop**: Center crop or random crop (training) to 224×224
-- **Normalization**: ImageNet statistics
-  - Mean: `[0.485, 0.456, 0.406]`
-  - Std: `[0.229, 0.224, 0.225]`
-- **Channel order**: RGB
-
-#### Data Augmentation (Training Only)
-- **Random horizontal flip**: 50% probability
-- **Random crop**: 224×224 from 256×256
-- **Color jittering**: Disabled by default (can enable in config)
-- **Temporal augmentation**: None (preserves frame order and timing)
-
-#### Test/Validation Preprocessing
-- **Deterministic**: No randomness
-- **Center crop**: 224×224
-- **No flipping or color jittering
-
-**Configuration Example**:
-```yaml
-feeder_args:
-    datatype: video  # or memmap, lmdb, features
-    resize_shape: [256, 256]
-    crop_shape: [224, 224]
-    mean: [0.485, 0.456, 0.406]
-    std: [0.229, 0.224, 0.225]
-    random_flip: true  # Training only
-    center_crop: false  # False=random crop (train), True=center (test)
-```
-
-### 1.3 Gloss Vocabulary and Label Mapping
-
-Each dataset has a unified gloss vocabulary:
-
-#### Phoenix2014
-- **Vocabulary size**: 1,296 glosses
-- **Special tokens**: `<blank>` (CTC blank, index 0)
-- **Mapping file**: `core/configs/gloss_dict/phoenix2014.txt`
-- **Format**: One gloss per line, line number = gloss index
-
-#### Phoenix2014-T
-- **Vocabulary size**: 1,066 glosses
-- **Special tokens**: `<blank>` (CTC blank, index 0)
-- **Mapping file**: `core/configs/gloss_dict/phoenix2014t.txt`
-
-#### CSL-Daily
-- **Vocabulary size**: 2,000 glosses
-- **Special tokens**: `<blank>` (CTC blank, index 0)
-- **Mapping file**: `core/configs/gloss_dict/csl_daily.txt`
-
-**Important**: All models for a given dataset must use the **same gloss vocabulary file**. Vocabulary changes invalidate cross-model comparisons.
-
-### 1.4 Decoding Protocol
-
-#### Greedy Decoding (Default)
-- **Method**: Argmax at each time step
-- **CTC collapse**: Remove consecutive duplicates and blanks
-- **Post-processing**: None (raw gloss sequence)
-
-**Implementation**:
-```python
-# Pseudo-code
-logits = model(video)  # Shape: [B, T, vocab_size]
-predictions = torch.argmax(logits, dim=-1)  # [B, T]
-decoded = ctc_collapse(predictions)  # Remove duplicates and blanks
-```
-
-#### Beam Search Decoding (Optional)
-- **Beam size**: 10 (configurable)
-- **Length penalty**: None by default
-- **Language model weight**: 0.0 (disabled by default)
-- **Scorer**: CTC prefix beam search
-
-**Configuration**:
-```yaml
-decoder_args:
-    beam_size: 10
-    lm_weight: 0.0  # Set >0 to enable language model
-    length_penalty: 0.0
-```
-
-**Important**: Decoder settings must be reported with results. Changing beam size or LM weight changes performance.
-
-### 1.5 WER Calculation
-
-#### Metric Definition
-Word Error Rate (WER) = (Substitutions + Insertions + Deletions) / Reference Length
-
-#### Implementation
-- **Tool**: Pure Python implementation (core/libs/pysclite)
-- **No external dependencies**: No sclite binary, no shell calls
-- **Alignment**: Levenshtein distance with standard CTC blank handling
-
-#### Text Post-processing
-- **Lowercasing**: No (preserve case from gloss vocabulary)
-- **Special tokens**: Remove `<blank>`, `<eos>`, `<sos>` if present
-- **Whitespace**: Strip leading/trailing, collapse multiple spaces
-- **Empty predictions**: Count as errors (all deletions)
-
-#### Per-Sample vs. Corpus-Level
-- **Default**: Corpus-level WER (concatenate all hypotheses and references)
-- **Optional**: Per-sample WER for error analysis
-
-**Output Format**:
 ```json
 {
+  "experiment_name": "...",
+  "seed": 0,
+  "dataset": "phoenix2014",
+  "split": "test",
+  "model": "slowfast",
+  "decoder": "beam",
   "wer": 21.5,
-  "substitutions": 120,
-  "insertions": 45,
-  "deletions": 32,
-  "reference_length": 917,
-  "total_errors": 197
+  "total_samples": 629,
+  "successful_samples": 598,
+  "skipped_samples": 28,
+  "failed_samples": 3,
+  "skip_rate": 0.0445,
+  "status": "valid",
+  "timestamp": "...",
+  "work_dir": "...",
+  "config_path": "..."
 }
 ```
 
-### 1.6 Training Hyperparameters
-
-While not fully standardized (models have different optimal settings), report these for reproducibility:
-
-- **Optimizer**: Adam (default), SGD, or other
-- **Learning rate**: Initial and schedule (e.g., step decay at epochs [40, 60])
-- **Weight decay**: Typically 0.0001
-- **Batch size**: Per-GPU and effective (total)
-- **Number of epochs**: Typically 60-80 for Phoenix, 40-60 for CSL-Daily
-- **Gradient clipping**: Max norm (e.g., 5.0) if used
-- **Mixed precision**: FP16 or FP32
-
-### 1.7 Sample Validity Tracking
-
-Every experiment must record:
+**`sample_statistics_{dev,test}.json`** ——由 `SampleStatistics.save()` 写出,
+含摘要与逐样本明细:
 
 ```json
 {
+  "experiment": "...",
   "total_samples": 629,
   "successful": 598,
   "skipped": 28,
   "failed": 3,
   "skip_rate": 0.0445,
   "status": "valid",
-  "skipped_samples": ["video_001", "video_042", ...],
-  "failed_samples": ["video_133"],
-  "error_details": [
-    {"sample": "video_133", "error": "RuntimeError: CUDA OOM", "traceback": "..."}
-  ]
+  "skip_reasons": {"missing_file": 28},
+  "successful_samples": ["..."],
+  "skipped_samples": ["..."],
+  "failed_samples": ["..."],
+  "skip_reasons_detail": {"missing_file": ["..."]},
+  "errors": [{"sample": "...", "error": "...", "traceback": "..."}]
 }
 ```
 
-**Validity Criteria**:
-- `skip_rate ≤ 0.05` (5%): Experiment marked `valid`
-- `skip_rate > 0.05`: Experiment marked `invalid`, excluded from main results
+## 8. 结果报告要求
 
-**Sample Manifest**: All models must evaluate on the **same set of valid samples** for fair comparison.
+每条结果必须注明:
 
-## 2. Official Protocol
+- **Seed**:`random_seed` 取值
+- **Dataset**:数据集与划分(如 `phoenix2014/test`)
+- **Model**:网络节名与关键 `model_args`
+- **Decoder**:`decode_mode` 取值
+- **Sample statistics**:total / successful / skipped / failed,以及
+  `skip_rate` 与 `status`
 
-The official protocol preserves original paper settings for models with specialized preprocessing or decoders.
+**不要**在同一张表里混用不同网络配置或解码设置的结果,否则对比无意义。
 
-### 2.1 When to Use Official Protocol
+## 9. 复现
 
-Use official protocol when:
-- Original paper uses non-standard preprocessing (e.g., different resize, custom augmentation)
-- Model requires specific frame sampling (e.g., non-uniform, motion-based)
-- Custom gloss vocabulary or label mapping
-- Specialized decoder (e.g., attention-based, not CTC)
+要复现某个结果,需同时满足:
 
-### 2.2 Configuration
+1. 相同的 `random_seed`
+2. 相同的代码版本(git commit)
+3. 相同的数据集与预处理产物
+4. 相同的实验节(exp + network + dataset 三份配置)
+5. 尽量相同的 PyTorch / CUDA / cuDNN 版本
 
-```yaml
-protocol: official
-official_settings:
-    # Model-specific settings
-    preprocessing: custom_preprocess_function
-    vocabulary: path/to/custom_vocab.txt
-    decoder: custom_decoder
-```
+即使固定了种子,不同 CUDA / cuDNN 版本与不同型号 GPU 仍可能带来微小差异。
 
-### 2.3 Reporting
+## 10. 联系方式
 
-Official protocol results must be:
-- Clearly labeled as "Official Protocol"
-- Reported separately from unified protocol results
-- Placed in supplementary materials or reproduction reports
-- Never mixed with unified protocol in the same table
-
-## 3. Result Reporting Requirements
-
-Every reported result must include:
-
-### 3.1 Mandatory Metadata
-- **Protocol**: `unified` or `official`
-- **Seed**: The random seed used (e.g., `0`)
-- **Dataset**: Dataset name and split (e.g., `phoenix2014/test`)
-- **Model**: Model name and configuration (e.g., `SlowFast-101`)
-- **Decoder**: Decoder type and settings (e.g., `greedy` or `beam-10`)
-
-### 3.2 Sample Statistics
-- Total samples
-- Successful predictions
-- Skipped samples (with reasons)
-- Failed samples (with error types)
-- Skip rate and validity status
-
-### 3.3 Performance Metrics
-- WER (%)
-- Substitutions, insertions, deletions (counts)
-- Reference length
-
-### 3.4 Optional Efficiency Metrics
-- Model parameters (M)
-- Peak GPU memory (GB)
-- Training throughput (samples/sec)
-- Total training time (GPU-hours)
-- Inference time per video (ms)
-
-### Example Result Entry
-
-```json
-{
-  "experiment": "slowfast_phoenix14_unified",
-  "protocol": "unified",
-  "seed": 0,
-  "dataset": "phoenix2014",
-  "split": "test",
-  "model": "SlowFast-101",
-  "decoder": "greedy",
-  "samples": {
-    "total": 629,
-    "successful": 598,
-    "skipped": 28,
-    "failed": 3,
-    "skip_rate": 0.0445,
-    "status": "valid"
-  },
-  "performance": {
-    "wer": 21.5,
-    "substitutions": 120,
-    "insertions": 45,
-    "deletions": 32,
-    "reference_length": 917
-  },
-  "efficiency": {
-    "params_m": 45.2,
-    "peak_memory_gb": 8.3,
-    "inference_ms_per_video": 42.1
-  },
-  "timestamp": "2024-09-09T10:30:00Z",
-  "commit": "b011062"
-}
-```
-
-## 4. Reproducibility Guidelines
-
-### 4.1 Exact Reproduction
-
-To exactly reproduce a result:
-1. Use the **same seed**
-2. Use the **same code version** (git commit)
-3. Use the **same dataset** (including preprocessing)
-4. Use the **same configuration file**
-5. Use the **same PyTorch/CUDA versions** (if possible)
-6. Use the **same sample manifest** (exclude the same failed samples)
-
-### 4.2 Expected Variation
-
-Even with fixed seeds, minor variations may occur due to:
-- CUDA driver versions
-- cuDNN versions
-- Hardware differences (different GPU models)
-- Operating system differences
-
-**Typical variation**: ±0.1-0.3% WER for well-behaved models
-
-### 4.3 Version Pinning
-
-For strict reproducibility, pin these versions:
-```
-python==3.7.x
-torch==1.8.0
-torchvision==0.9.0
-numpy==1.19.x
-opencv-python==4.5.x
-scipy==1.2.x
-```
-
-## 5. Protocol Validation Checklist
-
-Before submitting results, verify:
-
-- [ ] Protocol (`unified` or `official`) clearly stated
-- [ ] Seed value recorded in config and results
-- [ ] All models use same gloss vocabulary for the dataset
-- [ ] Preprocessing settings match unified protocol (if using unified)
-- [ ] Decoder settings reported
-- [ ] Sample statistics included (total/success/skip/fail)
-- [ ] Skip rate ≤ 5% (or experiment marked invalid)
-- [ ] Same sample manifest used across models
-- [ ] No protocol mixing in comparison tables
-- [ ] Code version (git commit) recorded
-- [ ] Configuration file saved with results
-
-## 6. Protocol Evolution
-
-This document describes the protocol for **OpenCSLR v1.0.0**. 
-
-Future versions may introduce new protocols (e.g., `unified_v2`). When this happens:
-- Old results remain valid with their protocol label
-- New protocols must be backward-incompatible or clearly superior
-- Protocol version must be included in all results
-- Migration guide must be provided
-
-## Contact
-
-For protocol questions or clarifications:
-- Open an issue: https://github.com/immc-lab/OpenCSLR/issues
-- Label: `protocol` or `reproducibility`
+- 问题反馈:https://github.com/immc-lab/OpenCSLR/issues
+- 标签:`reproducibility`

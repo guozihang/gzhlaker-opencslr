@@ -1,9 +1,8 @@
 """Unified data preprocessing for Phoenix2014, Phoenix2014-T and CSL-Daily.
 
-Merged from:
-    dataset_preprocess.py             (Phoenix2014)
-    dataset_preprocess-T.py           (Phoenix2014-T)
-    dataset_preprocess-CSL-Daily.py   (CSL-Daily)
+三个数据集共用一套脚本,用 --dataset 选择。公共步骤(生成 gt stm、帧缩放、
+ground truth 字典、并行调度)在上面的 Shared helpers,各数据集的差异只在
+csv2dict 和 resize 两处,分别写在各自的 section 里。
 
 Usage:
     python dataset_preprocess.py --dataset phoenix2014  --dataset-root /path/to/phoenix-2014-multisigner --process-image

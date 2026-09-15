@@ -5,8 +5,6 @@ Handles the construction and lifecycle of model, optimizer, and learning rate
 scheduler objects for experiments.
 """
 
-import importlib
-
 import torch.optim as optim
 
 from .argument_manager import ArgumentManager
@@ -53,15 +51,10 @@ class ModuleManager:
         ModuleManager.MODEL_OBJECT = ModuleManager.MODEL_OBJECT.to(DeviceManager.output_device)
 
     @classmethod
-    def init_optimizer_object(cls, optimizer_type="Adam"):
+    def init_optimizer_object(cls):
         """Initialize the optimizer object.
 
         Creates an SGD or Adam optimizer based on the configuration.
-        The optimizer_type parameter is unused; the optimizer type is read
-        from the configuration.
-
-        Args:
-            optimizer_type: Default optimizer type (unused, kept for compatibility)
 
         Raises:
             ValueError: When the optimizer type is not supported
@@ -76,14 +69,13 @@ class ModuleManager:
                 weight_decay = arg [ 'weight_decay' ]
             )
         elif arg [ "optimizer" ] == 'Adam' :
-            alpha = arg [ 'learning_ratio' ]
             cls.OPTIMIZER_OBJECT = optim.Adam (
                 cls.MODEL_OBJECT.parameters ( ) ,
                 lr = arg [ 'base_lr' ] ,
                 weight_decay = arg [ 'weight_decay' ]
             )
         else :
-            raise ValueError ( )
+            raise ValueError ( f"Unknown optimizer: {arg['optimizer']!r}" )
 
 
     @classmethod
@@ -91,16 +83,12 @@ class ModuleManager:
         """Initialize the learning rate scheduler.
 
         Creates a MultiStepLR scheduler with the configured step milestones
-        and gamma value.
-
-        Raises:
-            ValueError: When the optimizer type is not supported
+        and gamma value. The optimizer type was already validated by
+        init_optimizer_object, so no branch is needed here.
         """
         arg = ArgumentManager.get ( ).optimizer_args
-        if arg["optimizer"] in ['SGD', 'Adam']:
-            cls.SCHEDULER_OBJECT = optim.lr_scheduler.MultiStepLR(cls.OPTIMIZER_OBJECT, milestones=arg['step'], gamma=0.2)
-        else:
-            raise ValueError()
+        cls.SCHEDULER_OBJECT = optim.lr_scheduler.MultiStepLR(
+            cls.OPTIMIZER_OBJECT, milestones=arg['step'], gamma=0.2)
 
     @classmethod
     def print_model_object(cls):
@@ -110,9 +98,7 @@ class ModuleManager:
         structure using LogManager.
         """
         if DeviceManager.is_main_process():
-            model_ref = ArgumentManager.get( "model" )
-            # 注册名(如 "slowfast")直接作为标题;完全限定路径取模块名
-            model_name = model_ref.split ( "." )[-2 ] if "." in model_ref else model_ref
+            model_name = ArgumentManager.get( "model" )
             LogManager.info_panel( cls.MODEL_OBJECT , title= f"{model_name}" )
 
     @classmethod
@@ -160,24 +146,19 @@ class ModuleManager:
 
     @classmethod
     def load(cls, name):
-        """按注册名或完全限定路径获取模型构建函数。
+        """按注册名获取模型构建函数。
 
-        优先查询模型注册表(models.registry,由 build_function 的
-        @register_model 装饰器填充);注册名未命中时回退到按
-        "module.path.attr" 形式的动态导入,兼容旧配置。
+        注册表由 models/ 下各构建函数的 @register_model 装饰器填充,新增模型
+        只需在 config 的 ``model:`` 字段写上注册名。
 
         Args:
-            name: 注册名(如 "slowfast")或完全限定路径(如
-                "models.build_function.build_slowfast")
+            name: 注册名(如 "slowfast")
 
         Returns:
-            The imported attribute (typically a function or class)
+            callable: 模型构建函数。
+
+        Raises:
+            ValueError: 注册名不存在时抛出,并列出全部可用模型。
         """
-        import models.build_function  # 确保注册表已填充
-        from models.registry import MODEL_BUILDERS
-        if name in MODEL_BUILDERS:
-            return MODEL_BUILDERS[name]
-        components = name.rsplit ( '.' , 1 )
-        mod = importlib.import_module ( components [ -2 ] )
-        mod = getattr ( mod , components [ -1 ] )
-        return mod
+        from models import get_model_builder  # 导入 models 即触发各模型注册
+        return get_model_builder(name)

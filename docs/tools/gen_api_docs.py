@@ -39,8 +39,7 @@ DEFAULT_INDEX = os.path.join(REPO_ROOT, "docs", "source", "api.rst")
 
 # 相对 core/ 的第三方(vendored)目录前缀,不生成文档
 EXCLUDED_DIRS = [
-    "models/modules/slowfast",
-    "libs/sync_batchnorm",
+    "modules/spatio/slowfast_modules",
     "libs/slr_eval",
     "libs/ctcdecode",
     "libs/pysclite",
@@ -52,7 +51,7 @@ GROUP_LABELS = {
     "manager": "管理器(Manager)",
     "models": "模型(Models)",
     "dataset": "数据集(Dataset)",
-    "pipline": "训练流水线(Pipeline)",
+    "pipeline": "训练流水线(Pipeline)",
     "preprocess": "数据预处理(Preprocess)",
     "libs": "工具库(Libs)",
 }
