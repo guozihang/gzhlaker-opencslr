@@ -485,7 +485,8 @@ OpenCSLR/
 ├── script/                    # Helper scripts
 │   ├── run.sh                 # Training wrapper
 │   ├── train_watchdog.sh      # Auto-restart on crash
-│   └── word_cooccurrence.py   # groundtruth 词频/共现统计与检索（CSL-Daily 等）
+│   ├── word_cooccurrence.py   # groundtruth 词频/共现统计与检索（CSL-Daily 等）
+│   └── word_correction_jev.py # 用 TypeSafe jev 逐词纠正 gloss 样本（先查词频再让模型判断）
 ├── scripts/                   # Verification scripts
 │   ├── verify_installation.sh
 │   └── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
