@@ -74,3 +74,15 @@ Data flows as a dict through all containers — each container's forward pass up
 
 ### GPU Configuration
 `DeviceManager` handles multi-GPU setup. Multi-GPU DataParallel is applied to `spatial_module_container` only (see `ExperimentManager.model_to_device`).
+
+## MCP Service (mcp_server/)
+
+`mcp_server/` exposes experiment management as MCP tools so an existing agent (Claude Code, etc.) can drive this repo without the repo embedding any agent/LLM runtime itself. No model APIs are called from this side — decisions belong to the client.
+
+- `server.py` is the **only** module that imports `mcp`; everything else (config, runs, results) is plain Python and testable without the SDK or torch.
+- `core_probe.py` runs the **real** `ArgumentManager` + `ConfigManager` in a subprocess and returns the resolved config as JSON. Never re-implement config rules (key whitelist, merge order, validation) in the MCP layer — delegate, so tool verdicts match what training actually does.
+- Tools are registered through `server.tool()`, not `mcp.tool()` — it translates `McpToolError` into the SDK's `ToolError`, the only exception type whose message the SDK forwards to the caller. Raising anything else reduces a useful reason ("experiment not found") to a bare `Error executing tool <name>`.
+- Runs are launched detached (`start_new_session=True`) with records plus logs under `<repo>/.mcp_runs/`; `stop_run` verifies the pid's command line before signalling so it can never kill an unrelated process.
+- Tests: `python -m unittest discover -s mcp_server/tests -t .` (stdlib only; no torch/GPU needed).
+
+

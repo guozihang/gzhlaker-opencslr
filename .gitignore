@@ -249,3 +249,6 @@ Temporary Items
 # 预训练权重,超出 GitHub 100MB 单文件限制
 core/modules/spatio/slowfast_modules/ckpt/
 *.pkl
+
+# MCP 服务的运行记录(进程 pid、命令、日志),属于本机状态
+.mcp_runs/
