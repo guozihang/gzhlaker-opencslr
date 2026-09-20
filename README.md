@@ -427,6 +427,27 @@ python main.py --config configs/exp.yaml --exp baseline --wandb
 
 Tracks: loss curves, WER per epoch, GPU memory, learning rate, sample statistics, and checkpoints.
 
+## MCP Service: Experiment Management for Agents
+
+仓库自带一个 [MCP](https://modelcontextprotocol.io) 服务,把实验管理能力暴露成标准工具,
+让**已有的智能体**(Claude Code、IDE 助手等)直接调用工具来管理本仓库的实验:
+查看实验清单、预览实际生效的配置、新建实验、启动/停止训练、追踪进度、读取 WER 与 checkpoint。
+
+仓库本身不内置智能体、不调用任何大模型 API——决策在客户端那侧做,服务只负责把仓库能力
+可靠地暴露出去。
+
+```bash
+pip install -r mcp_server/requirements.txt          # 只多一个 mcp 包
+claude mcp add opencslr -- python3 -m mcp_server --root "$PWD"
+```
+
+仓库根目录的 `.mcp.json` 已配好项目级服务,在仓库里打开 Claude Code 会自动发现。
+完整的工具清单、环境变量与设计说明见 [mcp_server/README.md](mcp_server/README.md)。
+
+**配置只有一个真相来源。** 工具里的配置校验不是另写一份规则,而是在子进程里跑真实的
+`ArgumentManager` + `ConfigManager`,因此 `resolve_experiment` 的结论与真正启动时一致——
+配置错误在占上 GPU 之前就会报出来。
+
 ## Documentation
 
 - **实验约定**: [docs/PROTOCOLS.md](docs/PROTOCOLS.md)
@@ -482,6 +503,13 @@ OpenCSLR/
 │   │   └── single.py
 │   └── preprocess/            # Data preprocessing
 │       └── dataset_preprocess.py
+├── mcp_server/                # MCP 服务:把实验管理暴露成工具给已有智能体
+│   ├── server.py              #   工具定义(唯一依赖 mcp 包的模块)
+│   ├── config.py              #   三个配置入口的读取与写入
+│   ├── core_probe.py          #   子进程里跑真实配置管理器,保证结论一致
+│   ├── runs.py                #   启停与运行记录
+│   ├── results.py             #   结果/日志/checkpoint 读取
+│   └── tests/                 #   不需要 torch/GPU 的测试
 ├── script/                    # Helper scripts
 │   ├── run.sh                 # Training wrapper
 │   └── train_watchdog.sh      # Auto-restart on crash
