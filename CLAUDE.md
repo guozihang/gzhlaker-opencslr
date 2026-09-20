@@ -84,5 +84,3 @@ Data flows as a dict through all containers — each container's forward pass up
 - Tools are registered through `server.tool()`, not `mcp.tool()` — it translates `McpToolError` into the SDK's `ToolError`, the only exception type whose message the SDK forwards to the caller. Raising anything else reduces a useful reason ("experiment not found") to a bare `Error executing tool <name>`.
 - Runs are launched detached (`start_new_session=True`) with records plus logs under `<repo>/.mcp_runs/`; `stop_run` verifies the pid's command line before signalling so it can never kill an unrelated process.
 - Tests: `python -m unittest discover -s mcp_server/tests -t .` (stdlib only; no torch/GPU needed).
-
-
