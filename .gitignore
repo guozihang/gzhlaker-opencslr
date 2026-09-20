@@ -249,3 +249,7 @@ Temporary Items
 # 预训练权重,超出 GitHub 100MB 单文件限制
 core/modules/spatio/slowfast_modules/ckpt/
 *.pkl
+
+# 词频共现统计输出:由 script/word_cooccurrence.py build 从 groundtruth STM 生成,
+# 秒级可重建,不入库(query 缺少时也会现场统计)
+word_cooccurrence_*.json

@@ -484,7 +484,8 @@ OpenCSLR/
 │       └── dataset_preprocess.py
 ├── script/                    # Helper scripts
 │   ├── run.sh                 # Training wrapper
-│   └── train_watchdog.sh      # Auto-restart on crash
+│   ├── train_watchdog.sh      # Auto-restart on crash
+│   └── word_cooccurrence.py   # groundtruth 词频/共现统计与检索（CSL-Daily 等）
 ├── scripts/                   # Verification scripts
 │   ├── verify_installation.sh
 │   └── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
