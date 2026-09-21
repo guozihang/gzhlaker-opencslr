@@ -482,12 +482,12 @@ OpenCSLR/
 │   │   └── single.py
 │   └── preprocess/            # Data preprocessing
 │       └── dataset_preprocess.py
-├── script/                    # Helper scripts
+├── script/                    # Helper / verification scripts
 │   ├── run.sh                 # Training wrapper
-│   └── train_watchdog.sh      # Auto-restart on crash
-├── scripts/                   # Verification scripts
+│   ├── train_watchdog.sh      # Auto-restart on crash
 │   ├── verify_installation.sh
-│   └── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
+│   ├── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
+│   └── convert_legacy_weights.py # 旧 checkpoint 结构校验与转换（含测试同名 test_*.py）
 ├── docs/                      # Documentation
 ├── requirements.txt           # Pip dependencies
 ├── environment.yml            # Conda environment
