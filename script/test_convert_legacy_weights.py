@@ -130,9 +130,52 @@ def test_convert_roundtrip_is_lossless_and_loads_strictly():
     print("[OK] convert 往返：strict 加载通过且逐元素相同")
 
 
+def test_detect_sen_temporal_reads_key_depth():
+    """SEN 两种时序卷积靠 key 的层级区分：旧 MaxPool 版是摊平的 Sequential。"""
+    assert clw.detect_sen_temporal(
+        {"temporal_module_container.module_list.0.conv1d.temporal_conv.3.weight": 1}) == "maxpool"
+    assert clw.detect_sen_temporal(
+        {"temporal_module_container.module_list.0.conv1d.temporal_conv.1.predictor.0.weight": 1}
+    ) == "liftpool"
+    assert clw.detect_sen_temporal({"temporal_module_container.module_list.0.conv1d.fc.weight": 1}) is None
+    print("[OK] detect_sen_temporal 判别两种 SEN 时序卷积")
+
+
+def test_sen_legacy_checkpoint_is_rebuilt_with_maxpool_temporal():
+    """旧 SEN checkpoint：默认(LiftPool)结构建不出来，脚本要自动切到 MaxPool 版。"""
+    cfg = {
+        "model": "sen",
+        "model_args": {"num_classes": 8, "conv_type": 2, "use_bn": 1,
+                       "kernel_size": ["K5", "P2", "K5", "P2"], "stride": [4, 0]},
+        "loss_weights": {"ConvCTC": 1.0, "SeqCTC": 1.0},
+    }
+    legacy_args = dict(cfg["model_args"], temporal_conv="maxpool")
+    state = dict(clw.build_model("sen", dict(cfg, model_args=legacy_args)).state_dict())
+    assert clw.detect_sen_temporal(state) == "maxpool"
+
+    default_model = clw.build_model("sen", cfg)
+    assert clw.detect_sen_temporal(default_model.state_dict()) == "liftpool"
+    diff = clw.analyze(state, default_model)
+    assert diff["missing"], "LiftPool 版应该缺掉旧 MaxPool 版时序卷积的 key"
+    assert diff["shape_mismatch"] == []
+    # 旧时序卷积的 key 在当前模型里解释不了，analyze 会因为这一条阻断自动转换
+    assert diff["orphan_extra"], "旧 MaxPool 版的时序卷积 key 应被报成无法解释"
+
+    rebuilt = clw.build_model_for("sen", cfg, None, state)
+    assert set(rebuilt.state_dict()) == set(state)
+    rebuilt.load_state_dict(state, strict=True)
+
+    # 显式指定的实现不该被自动改掉
+    explicit = clw.build_model_for("sen", cfg, {"temporal_conv": "liftpool"}, state)
+    assert set(explicit.state_dict()) == set(default_model.state_dict())
+    print("[OK] 旧 SEN checkpoint 自动按 temporal_conv=maxpool 重建并 strict 加载")
+
+
 if __name__ == "__main__":
     test_read_checkpoint_unwraps_wrapper_and_module_prefix()
     test_read_checkpoint_rejects_unknown_format()
     test_analyze_classifies_extra_keys_and_shapes()
     test_convert_roundtrip_is_lossless_and_loads_strictly()
+    test_detect_sen_temporal_reads_key_depth()
+    test_sen_legacy_checkpoint_is_rebuilt_with_maxpool_temporal()
     print("\nAll convert_legacy_weights tests passed.")

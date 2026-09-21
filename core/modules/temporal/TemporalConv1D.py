@@ -26,13 +26,16 @@ class TemporalConv1D(nn.Module):
             num_classes: 分类数(用于可选的分类头)
         conv_cls: 时序卷积实现类,需接受与 ``tconv.TemporalConv``
             相同的构造参数。
+        input_size: 输入特征维度。默认 512,与旧代码 TLP/VAC 的写死值一致;
+            只有 SEN 的旧实现是从配置里读的,加载旧 SEN 权重时才需要覆盖。
+        hidden_size: 隐藏层特征维度,同上。
     """
 
-    def __init__(self, args, conv_cls=TemporalConv):
+    def __init__(self, args, conv_cls=TemporalConv, input_size=512, hidden_size=1024):
         super(TemporalConv1D, self).__init__()
         self.conv1d = conv_cls(
-            input_size=512,
-            hidden_size=1024,
+            input_size=input_size,
+            hidden_size=hidden_size,
             kernel_size=args["kernel_size"],
             stride=args["stride"],
             use_bn=args["use_bn"],

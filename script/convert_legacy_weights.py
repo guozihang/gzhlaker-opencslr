@@ -17,15 +17,20 @@ ebdb77f（重构前的参考提交）后有两处结构确实变了，旧 checkp
    部分即可，不损失任何有效权重。
 
    另外 SlowFast 的融合方式 ``FuseFastToSlow`` / ``FuseBiAdd`` 两种实现在
-   fuse_helper.py 里都还在，重构只改了 yaml 里的默认值。两者参数集合不同（BiAdd 多
+   fuse_helper.py 里都还在，重构改的只是 SLOWFAST_64x2_R101_50_50.yaml 里的 FUSE 默认值
+   （FuseFastToSlow → FuseBiAdd）。两者参数集合不同（BiAdd 多
    ``weight_s``/``weight_f``/``conv_s2f``/``bn2``，FastToSlow 是 ``conv_f2s``+``bn``），
    不是改 key 能解决的——脚本会从 checkpoint 的 key 反推它属于哪一种，和当前配置不一致时
-   明确提示改哪一行配置。
+   明确提示换配置。旧权重是 FuseFastToSlow，对应的 yaml 已经放好一份副本
+   （``configs/SLOWFAST_64x2_R101_50_50_FuseFastToSlow.yaml``，只差 FUSE 一行），加一个
+   ``--model-arg slowfast_config=SLOWFAST_64x2_R101_50_50_FuseFastToSlow.yaml`` 即可。
 
-2. SEN。旧代码用 MaxPool 版时序卷积（senmodules/sen_TemporalConv.py），当前 build_sen
-   复用 LiftPool 版 TemporalConv1D，参数集合不同（多出 predictor/updater/weight1/
-   weight2）。这类 checkpoint 无法无损转换，脚本会直接报错说明。exp.yaml 里没有 SEN
-   实验，正常不会遇到。
+2. SEN。旧代码用 MaxPool 版时序卷积（senmodules/sen_TemporalConv.py），重构后 build_sen
+   默认换成 LiftPool 版 TemporalConv，参数集合不同（LiftPool 版多出 predictor/updater/
+   weight1/weight2）。这一处现在也能无损转换：``model_args.temporal_conv`` 设为
+   ``maxpool`` 时 build_sen 按旧结构建模型（复用等价的 VACTemporalConv，key 与旧代码逐字
+   相同）。脚本会从 checkpoint 的 key 形状判断出来并自动切过去，network.yaml 的 sen 节
+   默认也是 ``maxpool``。
 
 TLP / VAC / CorrNet 的 state_dict 与 ebdb77f 逐 key 完全一致（名称、形状、共享关系都
 相同），脚本只做 wrapper 拆包和 ``module.`` 前缀清理。
@@ -88,6 +93,13 @@ _FUSE_KEYS = {
 _LEGACY_DEAD_PREFIXES = (
     "temporal_module_container.module_list.0.fc.",
 )
+
+# SEN 时序卷积的两种结构：旧 MaxPool 版把各层摊平成一个 nn.Sequential
+# （temporal_conv.<i>.weight），当前 LiftPool 版是嵌套的 ModuleList
+# （temporal_conv.<i>.<j>.weight）。key 的层数就是判别特征。
+_SEN_TEMPORAL_MARKER = ".conv1d.temporal_conv."
+_SEN_MAXPOOL = "maxpool"
+_SEN_LIFTPOOL = "liftpool"
 
 
 @contextlib.contextmanager
@@ -197,6 +209,46 @@ def detect_fuse(state):
     return None
 
 
+def detect_sen_temporal(state):
+    """从 state_dict 的 key 反推 SEN 用的时序卷积实现；判不出来返回 None。
+
+    旧 MaxPool 版是 nn.Sequential，key 形如 ``conv1d.temporal_conv.3.weight``；
+    当前 LiftPool 版是 ModuleList，套了一层 nn.Sequential，形如
+    ``conv1d.temporal_conv.1.predictor.0.weight``。后者层级更深。
+    """
+    for key in state:
+        if _SEN_TEMPORAL_MARKER not in key:
+            continue
+        depth = len(key.split(_SEN_TEMPORAL_MARKER, 1)[1].split("."))
+        if depth >= 3:
+            return _SEN_LIFTPOOL
+        if depth == 2:
+            return _SEN_MAXPOOL
+    return None
+
+
+def build_model_for(net_name, cfg, overrides, state):
+    """按当前代码构建模型；checkpoint 是旧结构时自动补上对应的兼容开关。
+
+    目前只有 SEN 需要：checkpoint 是旧 MaxPool 版时序卷积时，若配置里没显式指定
+    temporal_conv，就按 maxpool 重建一次，免得用户还要自己去翻脚本说明。
+    """
+    model = build_model(net_name, cfg, overrides)
+    if detect_sen_temporal(state) != _SEN_MAXPOOL:
+        return model
+    if cfg.get("model", net_name) != "sen":
+        return model
+    effective = dict(cfg.get("model_args") or {})
+    effective.update(overrides or {})
+    if effective.get("temporal_conv") is not None:
+        return model                     # 用户显式指定了实现，不擅自改
+    print("checkpoint 用的是旧版 MaxPool 时序卷积，按 SEN 旧结构重建模型"
+          "（temporal_conv=maxpool）……")
+    overrides = dict(overrides or {})
+    overrides["temporal_conv"] = _SEN_MAXPOOL
+    return build_model(net_name, cfg, overrides)
+
+
 def analyze(state, model):
     """对比 checkpoint 与当前模型的 key 集合，并把多出来的 key 分成三类。
 
@@ -255,7 +307,11 @@ def print_report(net_name, path, meta, state, model, diff, fuse):
         if current != fuse:
             print("  ✗ 融合方式不一致，这不是改 key 能解决的：两种实现（FuseFastToSlow /")
             print("    FuseBiAdd）都还在 fuse_helper.py 里，把 network.yaml 的")
-            print("    slowfast_config 指向的 yaml 中 FUSE 一行改成 {} 后重试。".format(fuse))
+            print("    slowfast_config 指向的 yaml 中 FUSE 一行改成 {} 后重试。"
+                  .format(fuse))
+            if fuse == "FuseFastToSlow":
+                print("    现成的一份副本：configs/SLOWFAST_64x2_R101_50_50_FuseFastToSlow.yaml，")
+                print("    用 --model-arg slowfast_config=SLOWFAST_64x2_R101_50_50_FuseFastToSlow.yaml 即可。")
 
     ok = True
     if diff["missing"]:
@@ -265,10 +321,15 @@ def print_report(net_name, path, meta, state, model, diff, fuse):
             print("    - {} {}".format(key, list(target[key].shape)))
         if len(diff["missing"]) > 20:
             print("    ... 其余 {} 个".format(len(diff["missing"]) - 20))
-        print("  这些参数只能重新训练。SEN 的时序模块从 MaxPool 版换成了 LiftPool 版，")
-        print("  如果是 SEN 权重，属于已知的不兼容，请见脚本头部说明。")
+        print("  这些参数只能重新训练；若只是配置和训练时不一致，按下面的提示改配置再跑。")
         if fuse is not None and detect_fuse(target) != fuse:
             print("  SlowFast 融合方式不一致也会表现成大量缺 key，先按上面的提示改配置。")
+        sen_style = detect_sen_temporal(state)
+        if sen_style is not None and sen_style != detect_sen_temporal(target):
+            print("  该 checkpoint 的 SEN 时序卷积是 {} 版，和当前模型（{} 版）不同："
+                  .format(sen_style, detect_sen_temporal(target) or "未知"))
+            print("  用 --model-arg temporal_conv={} 再跑一次即可（network.yaml 的 sen 节"
+                  "默认就是 maxpool）。".format(sen_style))
 
     if diff["shape_mismatch"]:
         ok = False
@@ -310,7 +371,7 @@ def print_report(net_name, path, meta, state, model, diff, fuse):
 def cmd_check(args):
     net_name, cfg = resolve_config(args.exp, args.model)
     meta, state = read_checkpoint(args.checkpoint)
-    model = build_model(net_name, cfg, parse_model_args(args.model_arg))
+    model = build_model_for(net_name, cfg, parse_model_args(args.model_arg), state)
     diff = analyze(state, model)
     ok = print_report(net_name, args.checkpoint, meta, state, model, diff,
                       detect_fuse(state))
@@ -320,7 +381,7 @@ def cmd_check(args):
 def cmd_convert(args):
     net_name, cfg = resolve_config(args.exp, args.model)
     meta, state = read_checkpoint(args.checkpoint)
-    model = build_model(net_name, cfg, parse_model_args(args.model_arg))
+    model = build_model_for(net_name, cfg, parse_model_args(args.model_arg), state)
     diff = analyze(state, model)
     ok = print_report(net_name, args.checkpoint, meta, state, model, diff,
                       detect_fuse(state))
