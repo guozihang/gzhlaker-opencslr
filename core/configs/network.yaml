@@ -27,6 +27,23 @@ slowfast:
     Slow: 1.0
     Fast: 1.0
 
+sen:
+  model: sen
+  decode_mode: beam
+  model_args:
+    # num_classes 要和训练时一致(这里沿用其他模型在 Phoenix2014 上的取值)。
+    num_classes: 1296
+    conv_type: 2
+    stride: [4, 0]
+    use_bn: 1
+    # 时序卷积实现。旧代码(ebdb77f)的 SEN 用的是 MaxPool 版,已有的 SEN 权重都是按它
+    # 训出来的,所以这里默认沿用 maxpool;要训练/评测当前代码的 LiftPool 版改成 liftpool。
+    # kernel_size 由 conv_type 推得(maxpool 版与旧代码优先级一致:配了 conv_type 就忽略
+    # kernel_size;liftpool 版则是没给 kernel_size 才用 conv_type)。
+    temporal_conv: maxpool
+  loss_weights:
+    <<: *common_ctc_loss
+
 tlp:
   model: tlp
   decode_mode: beam

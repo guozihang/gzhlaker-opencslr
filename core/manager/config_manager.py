@@ -29,6 +29,8 @@ class ConfigManager:
             "num_classes", "hidden_size", "c2d_type", "conv_type",
             "kernel_size", "use_bn", "share_classifier", "weight_norm",
             "slowfast_config", "stride",
+            # SEN 专用:时序卷积实现(liftpool 默认 / maxpool 兼容旧权重)、输入维度
+            "temporal_conv", "input_size",
         },
         "feeder_args": {
             "mode", "datatype", "num_gloss", "drop_ratio", "frame_interval",
@@ -52,6 +54,7 @@ class ConfigManager:
             "conv_type": int, "kernel_size": list, "use_bn": int,
             "share_classifier": (bool, int), "weight_norm": bool,
             "slowfast_config": str, "stride": list,
+            "temporal_conv": str, "input_size": int,
         },
         "feeder_args": {
             "mode": str, "datatype": str, "num_gloss": int, "drop_ratio": (int, float),

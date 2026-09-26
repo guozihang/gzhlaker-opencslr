@@ -82,7 +82,7 @@ pip install -r requirements.txt
 安装后可在仓库根目录运行自检脚本,它会检查依赖、配置文件与核心模块导入:
 
 ```bash
-bash scripts/verify_installation.sh
+bash script/verify_installation.sh
 ```
 
 ## Quick Start
@@ -452,7 +452,7 @@ claude mcp add opencslr -- python3 -m mcp_server --root "$PWD"
 
 - **实验约定**: [docs/PROTOCOLS.md](docs/PROTOCOLS.md)
 - **API Reference**: `docs/source/api/`,由源码注释自动生成
-- **安装自检**: `bash scripts/verify_installation.sh`
+- **安装自检**: `bash script/verify_installation.sh`
 
 Build docs locally:
 ```bash
@@ -503,19 +503,12 @@ OpenCSLR/
 │   │   └── single.py
 │   └── preprocess/            # Data preprocessing
 │       └── dataset_preprocess.py
-├── mcp_server/                # MCP 服务:把实验管理暴露成工具给已有智能体
-│   ├── server.py              #   工具定义(唯一依赖 mcp 包的模块)
-│   ├── config.py              #   三个配置入口的读取与写入
-│   ├── core_probe.py          #   子进程里跑真实配置管理器,保证结论一致
-│   ├── runs.py                #   启停与运行记录
-│   ├── results.py             #   结果/日志/checkpoint 读取
-│   └── tests/                 #   不需要 torch/GPU 的测试
-├── script/                    # Helper scripts
+├── script/                    # Helper / verification scripts
 │   ├── run.sh                 # Training wrapper
-│   └── train_watchdog.sh      # Auto-restart on crash
-├── scripts/                   # Verification scripts
+│   ├── train_watchdog.sh      # Auto-restart on crash
 │   ├── verify_installation.sh
-│   └── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
+│   ├── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
+│   └── convert_legacy_weights.py # 旧 checkpoint 结构校验与转换（含测试同名 test_*.py）
 ├── docs/                      # Documentation
 ├── requirements.txt           # Pip dependencies
 ├── environment.yml            # Conda environment
