@@ -82,7 +82,7 @@ pip install -r requirements.txt
 安装后可在仓库根目录运行自检脚本,它会检查依赖、配置文件与核心模块导入:
 
 ```bash
-bash scripts/verify_installation.sh
+bash script/verify_installation.sh
 ```
 
 ## Quick Start
@@ -452,7 +452,7 @@ claude mcp add opencslr -- python3 -m mcp_server --root "$PWD"
 
 - **实验约定**: [docs/PROTOCOLS.md](docs/PROTOCOLS.md)
 - **API Reference**: `docs/source/api/`,由源码注释自动生成
-- **安装自检**: `bash scripts/verify_installation.sh`
+- **安装自检**: `bash script/verify_installation.sh`
 
 Build docs locally:
 ```bash

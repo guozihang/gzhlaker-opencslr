@@ -9,17 +9,17 @@
 用法（仓库根目录执行）:
 
     # 在旧代码那一侧（重构前的 commit）
-    python scripts/dump_model_structures.py dump --out /tmp/before.json
+    python script/dump_model_structures.py dump --out /tmp/before.json
 
     # 在新代码这一侧（重构后）
-    python scripts/dump_model_structures.py dump --out /tmp/after.json
+    python script/dump_model_structures.py dump --out /tmp/after.json
 
     # 对比；退出码 0 = 完全一致，1 = 有差异（逐条列出）
-    python scripts/dump_model_structures.py compare /tmp/before.json /tmp/after.json
+    python script/dump_model_structures.py compare /tmp/before.json /tmp/after.json
 
 若只关心某个实验（实验节会覆盖网络节的同名键，与 ConfigManager 一致）:
 
-    python scripts/dump_model_structures.py dump --exp baseline --out /tmp/before.json
+    python script/dump_model_structures.py dump --exp baseline --out /tmp/before.json
 
 说明:
   - 只做 CPU 构建，不需要 GPU。模型按网络名从注册表取构建函数，因此本脚本同时
