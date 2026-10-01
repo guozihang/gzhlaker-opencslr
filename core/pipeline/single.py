@@ -89,11 +89,13 @@ def get_feeder_arg(cfg, key, default=None):
     feeder_args = getattr(cfg, "feeder_args", {}) or {}
     return feeder_args.get(key, default)
 
-def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weights=None):
+def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weights=None, control=None):
     """执行一个 epoch 的训练。
 
     使用混合精度训练(AMP),遍历所有 batch 计算损失并反向传播,
     每 200 个 batch 打印一次平均损失,epoch 结束后执行 scheduler.step()。
+    传入 ``control`` 时会在 batch 循环内周期性轮询运行时控制文件,
+    并按控制面生效的 log_interval 打印(默认仍为 200,未使用该功能时行为不变)。
 
     Args:
         loader: 训练数据 DataLoader。
@@ -103,6 +105,7 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
         device: 设备(CPU/GPU),当前未直接使用(data 由 DeviceManager 移入设备)。
         epoch_idx: 当前 epoch 索引,用于日志。
         loss_weights: 可选,损失权重,传递给模型内部的损失模块。
+        control: 可选的 RuntimeControl; 为 None 时完全不做运行时控制轮询。
 
     Returns:
         list[float]: 所有 batch 的 loss 值列表。
@@ -115,6 +118,10 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
     registered = DataloaderManager.DATALOADER.get("train")
     iterator = DataloaderManager.get_iterator("train") if registered is not None and loader is registered else loader
     for batch_idx, data in enumerate(tqdm(iterator, disable=not DeviceManager.is_main_process())):
+        if control is not None and batch_idx % 20 == 0:
+            # 周期性轮询,使学习率/损失权重等热更新在 batch 级别生效
+            control.poll(epoch=epoch_idx, batch=batch_idx)
+        log_interval = control.values.get("log_interval", 200) if control is not None else 200
         data = _to_device(data)
         optimizer.zero_grad()
         with autocast():
@@ -135,12 +142,12 @@ def seq_train(loader, model, optimizer, scheduler, device, epoch_idx, loss_weigh
         loss_value.append(loss.item())
         for item, value in loss_dict.items():
             total_loss_dict[item] = total_loss_dict.get(item, 0) + value
-        if batch_idx % 200 == 0:
+        if batch_idx % log_interval == 0:
             LogManager.info(
                 '\tEpoch: {}, Batch({}/{}) done. Loss: {:.8f}  lr:{:.6f}'
                     .format(epoch_idx, batch_idx, len(loader), loss.item(), clr[0]))
             for item, value in total_loss_dict.items():
-                LogManager.info(f'\t Mean {item} loss: {value/200:.5f}')
+                LogManager.info(f'\t Mean {item} loss: {value/log_interval:.5f}')
             total_loss_dict = {}
         del ret_dict
         del loss

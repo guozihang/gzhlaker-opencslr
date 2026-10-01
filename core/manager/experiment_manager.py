@@ -13,6 +13,7 @@ from .module_manager import ModuleManager
 from .device_manager import DeviceManager
 from pipeline.single import seq_train, seq_eval
 from models import Keys
+from utils.runtime_control import RuntimeControl
 from utils.seed_utils import set_seed, get_rng_state, set_rng_state
 
 class ExperimentManager:
@@ -106,12 +107,29 @@ class ExperimentManager:
 
         按 epoch 循环执行训练和评估，保存最佳模型和定期检查点，
         记录训练时间、验证集和测试集的 WER 指标。
+
+        若通过 ``--control-file`` 启用了运行时控制面，则每个 epoch 边界轮询一次
+        控制文件，并把控制对象传入 ``seq_train`` 以在 batch 循环内周期性轮询。
+        epoch 循环使用 while 形式，每次重新读取 ``num_epoch``，从而支持训练中途
+        延长或提前停止。
         """
         best_dev = 100.0
         best_epoch = 0
         total_time = 0
         seq_model_list = [ ]
-        for epoch in range ( cls.arg.optimizer_args [ 'start_epoch' ] , cls.arg.num_epoch ) :
+        control = RuntimeControl(getattr(cls.arg, "control_file", None))
+        control.bind(arg=cls.arg, optimizer=cls.optimizer,
+                     scheduler=cls.scheduler, model=cls.model)
+        epoch = cls.arg.optimizer_args [ 'start_epoch' ]
+        while epoch < cls.arg.num_epoch :
+            # epoch 边界轮询: 先应用改动,再计算 save_model/eval_model,使区间变更当个 epoch 即生效
+            overrides = control.poll(epoch=epoch)
+            if overrides is not None and DeviceManager.is_main_process ( ) :
+                LogManager.info (
+                    '运行时控制 revision {} 已处理: applied={}, ignored={}'.format (
+                        control.last_revision,
+                        control.last_applied,
+                        control.last_ignored ) )
             save_model = epoch % cls.arg.save_interval == 0
             eval_model = epoch % cls.arg.eval_interval == 0
             epoch_time = time.time ( )
@@ -124,7 +142,8 @@ class ExperimentManager:
                 cls.scheduler,
                 cls.device ,
                 epoch ,
-                loss_weights = cls.arg.loss_weights
+                loss_weights = cls.arg.loss_weights ,
+                control = control
             )
             if eval_model:
                 # 确保所有进程同步进入评估阶段，避免非主进程提前开始下一 epoch
@@ -171,6 +190,7 @@ class ExperimentManager:
             if DeviceManager.is_main_process ( ) :
                 LogManager.info ('Epoch {} costs {} mins {} seconds'.format ( epoch , int ( epoch_time ) // 60 ,
                                                                                int ( epoch_time ) % 60 ) )
+            epoch += 1
         DeviceManager.barrier()
         if DeviceManager.is_main_process ( ) :
             LogManager.info ( 'Training costs {} hours {} mins {} seconds'.format ( int ( total_time ) // 60 // 60 ,

@@ -203,6 +203,11 @@ class ArgumentManager:
             default = 80 ,
             help = 'stop training in which epoch' )
 
+        parser.add_argument (
+            '--control-file' ,
+            default = None ,
+            help = 'runtime control file for mid-training hyperparameter changes' )
+
         if not hasattr( cls , 'PARSER' ) :
             setattr ( cls , 'PARSER' , parser )
 
