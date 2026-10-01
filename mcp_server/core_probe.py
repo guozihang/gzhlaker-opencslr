@@ -107,8 +107,10 @@ def _override_flags(parser, overrides):
 
 
 def probe(request):
-    """执行一次解析,返回响应字典(不抛异常,失败也返回 ok=False)。"""
+    """执行一次请求,返回响应字典(不抛异常,失败也返回 ok=False)。"""
     try:
+        if request.get("mode") == "schema":
+            return _schema(request)
         return _resolve(request)
     except Exception as exc:
         return {
@@ -117,6 +119,100 @@ def probe(request):
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+
+
+def _type_name(value):
+    """把 argparse 的 type / ConfigManager 的类型规则转成可读名字。"""
+    if value is None:
+        return "str"
+    if isinstance(value, (tuple, list)):
+        return "|".join(_type_name(item) for item in value)
+    return getattr(value, "__name__", str(value))
+
+
+def _hot_spec(core_dir):
+    """训练中途可热改的超参数及其理由表(取自 core/utils/runtime_control)。
+
+    取不到时 keys 为 None:说明当前 core 没有控制面,调用方应当如实告诉用户
+    「不能热改」,而不是假装可以。
+    """
+    empty = {"keys": None, "descriptions": {}, "reasons": {}, "unknown_reason": None}
+    try:
+        from utils.runtime_control import (
+            HOT_KEY_TABLE,
+            HOT_KEYS,
+            IGNORED_REASONS,
+            UNKNOWN_REASON,
+        )
+    except Exception:
+        return empty
+    return {
+        "keys": sorted(HOT_KEYS),
+        "descriptions": {key: str(value) for key, value in (HOT_KEY_TABLE or {}).items()},
+        "reasons": {key: str(value) for key, value in (IGNORED_REASONS or {}).items()},
+        "unknown_reason": UNKNOWN_REASON,
+    }
+
+
+def _schema(request):
+    """导出 main.py 的参数清单与嵌套配置的允许键/类型。
+
+    全部取自真实的 ArgumentManager.PARSER 与 ConfigManager 的规则表,不在 MCP
+    层复刻第二份——所以「能改哪些超参数、什么类型」与真正启动时一致。
+    """
+    core_dir = _core_dir()
+    if core_dir not in sys.path:
+        sys.path.insert(0, core_dir)
+
+    from manager.argument_manager import ArgumentManager
+
+    sys.argv = ["main.py"]
+    ArgumentManager.init()
+    parser = ArgumentManager.get_parser()
+
+    arguments = []
+    for action in parser._actions:  # noqa: SLF001
+        if not action.option_strings or action.dest == "help":
+            continue
+        names = [option.lstrip("-").replace("-", "_") for option in action.option_strings]
+        arguments.append(
+            {
+                "name": names[0],
+                "dest": action.dest,
+                "flags": list(action.option_strings),
+                "type": _type_name(action.type),
+                "default": _jsonable(action.default),
+                "choices": sorted(str(item) for item in action.choices) if action.choices else None,
+                "nargs": action.nargs,
+                "help": (action.help or "").strip() or None,
+            }
+        )
+
+    from manager.config_manager import ConfigManager
+
+    nested = {
+        section: {
+            "allowed": sorted(keys),
+            "types": {
+                key: _type_name(kind)
+                for key, kind in ConfigManager.TYPE_RULES.get(section, {}).items()
+            },
+        }
+        for section, keys in ConfigManager.KNOWN_NESTED_KEYS.items()
+    }
+
+    schema = {
+        "ok": True,
+        "arguments": arguments,
+        "nested": nested,
+        "valid_optimizers": sorted(ConfigManager.VALID_OPTIMIZERS),
+        "hot": _hot_spec(core_dir),
+    }
+
+    # 带 exp 时顺带把当前生效值一起带上,省一次子进程
+    if request.get("exp") and request.get("config"):
+        schema["resolution"] = _resolve(request)
+    return schema
 
 
 def _resolve(request):
@@ -183,9 +279,11 @@ def main():
     try:
         raw = sys.stdin.read()
         request = json.loads(raw) if raw.strip() else {}
-        if not request.get("exp"):
+        is_schema = request.get("mode") == "schema"
+        # schema 请求可以只要参数清单(不要 exp/config);要解析时两者仍然必填
+        if not request.get("exp") and not is_schema:
             raise ValueError("请求缺少 'exp' 字段")
-        if not request.get("config"):
+        if not request.get("config") and not is_schema:
             raise ValueError("请求缺少 'config' 字段")
         response = probe(request)
     except Exception as exc:

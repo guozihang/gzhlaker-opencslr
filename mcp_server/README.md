@@ -60,9 +60,17 @@ python3 -m mcp_server --transport sse --port 8765 --host 0.0.0.0   # 局域网�
 | 工具 | 说明 |
 | --- | --- |
 | `create_experiment` | 在 exp.yaml 里新建(或整节替换)实验节 |
-| `launch_experiment` | 启动训练/评估,立刻返回 `run_id` |
+| `launch_experiment` | 启动训练/评估,立刻返回 `run_id`;`overrides` 可带超参数覆盖 |
 | `launch_preprocess` | 启动数据集预处理 |
 | `stop_run` | 停止自己启动的进程(SIGTERM,可选 SIGKILL) |
+
+### 调参与介入
+
+| 工具 | 说明 |
+| --- | --- |
+| `get_hyperparameters` | 某个实验的全部超参数:当前生效值、类型/取值域、能否中途热改 |
+| `set_hyperparameters` | 训练**进行中**改超参数(写控制文件,下一轮轮询生效) |
+| `get_control_state` | 回读训练进程的 ack:哪些键生效、哪些被拒绝以及理由 |
 
 ### 看结果
 
@@ -74,6 +82,49 @@ python3 -m mcp_server --transport sse --port 8765 --host 0.0.0.0   # 局域网�
 | `list_artifacts` | checkpoint、结果文件、日志 |
 | `tail_log` | 日志末尾若干行(按 run_id 或 work_dir) |
 | `list_work_dirs` | 找出跑过的实验目录 |
+
+## 调参与介入训练
+
+**一个典型回合**:`get_hyperparameters` 看能改什么 → `launch_experiment(overrides=...)`
+起一版 → `get_run_status` / `tail_log` 跟进 → 中途不满意就 `set_hyperparameters`
+热改 → `get_control_state` 回读 ack 确认。
+
+### 启动前改:临时配置,不动 exp.yaml
+
+`launch_experiment(name, overrides={"optimizer_args": {"base_lr": 0.0002}})` 会把
+「这个实验 + 这些覆盖」落成 `core/configs/_mcp_run_<run_id>.yaml` 再启动它:
+
+- 覆盖项按 YAML 语义**深合并**,所以只改 `model_args.use_bn` 不会丢掉网络节里的
+  `num_classes` / `c2d_type`(exp 节里的嵌套字典在 `ConfigManager` 里是整体替换的,
+  直接写会静默丢兄弟键);
+- 临时配置展开全部 anchor、把网络节里生效的键一并写进去,本身就是这次运行的快照;
+- `exp.yaml` 一个字节都不会被改;临时配置在进程结束后自动清理,快照留在
+  `<runs_dir>/<run_id>.config.yaml`,这次运行到底用了什么配置随时查得到;
+- 临时配置必须与 exp.yaml 同目录(下划线开头,不会被当成实验节):`ConfigManager`
+  是按配置所在目录去找 `network.yaml` / `dataset.yaml` 的。
+
+### 训练中途改:控制文件 + ack
+
+每次 `launch_experiment` 都会把 `--control-file <runs_dir>/<run_id>.control.json`
+传给 `main.py`。`set_hyperparameters` 就是往这个文件里写一条新的 `revision`:
+
+```
+{runs_dir}/<run_id>.control.json       MCP 写:{"revision": 2, "overrides": {...}}
+{runs_dir}/<run_id>.control.json.ack.json  训练进程写回:{"revision": 2, "applied": {...}, "ignored": {...}}
+```
+
+- 同一个 `revision` 不会被应用两次;训练在 epoch 边界与 batch 循环内(每 20 个
+  batch)各轮询一次;
+- 能热改的是**下一轮还能重新读到**的那些:学习率 / 权重衰减 / 衰减 epoch、
+  `loss_weights`、`num_epoch`(可中途延长或提前停)、`save/eval/log_interval`、
+  `print_log`,以及 `feeder_args` 里的两个评估开关。规则表只写在
+  `core/utils/runtime_control.py` 里,MCP 侧不复制第二份;
+- 改不了的是绑死在启动阶段的:网络结构(`model_args`)、`batch_size`/`num_worker`
+  (绑 DataLoader)、`device`/`phase`/`work_dir`、`decode_mode`(建模型时已固化)。
+  这些键不会静默忽略——它们连同理由出现在 ack 的 `ignored` 里,MCP 原样转述给
+  调用方,而不是假装成功;
+- 训练进程没装 torch 也能测:控制面模块只依赖标准库
+  (`python3 core/tests/test_runtime_control.py`)。
 
 ## 设计要点
 
@@ -105,8 +156,9 @@ python3 -m mcp_server --transport sse --port 8765 --host 0.0.0.0   # 局域网�
 mcp_server/
 ├── __main__.py       # 入口:python -m mcp_server [--transport ...]
 ├── server.py         # MCP 工具定义(唯一依赖 mcp 包的模块)
-├── config.py         # 三个配置入口的读取与写入
-├── core_probe.py     # 子进程里跑真实配置管理器,回传生效配置
+├── config.py         # 三个配置入口的读取与写入 + 临时运行配置 + 超参数清单
+├── control.py        # 训练中途热改的控制文件 / ack 读写
+├── core_probe.py     # 子进程里跑真实配置管理器,回传生效配置与参数 schema
 ├── runs.py           # 启动/停止/状态机 + 运行记录
 ├── results.py        # 结果、日志、checkpoint 读取
 ├── paths.py          # 仓库目录布局
@@ -125,6 +177,16 @@ python -m unittest discover -s mcp_server/tests -t .
 其中 `test_mcp_protocol.py` 是端到端的一层:真的用 MCP 客户端连上 `python -m mcp_server`,
 验证工具注册、参数 schema、正常返回,以及出错时原因确实送到了调用方(未装 `mcp` 包时
 整类跳过)。
+
+`test_hot_reload_loop.py` 是热改的闭环:假训练脚本加载仓库里真实的
+`core/utils/runtime_control.py` 轮询控制文件,验证「MCP 写控制文件 → 训练进程改掉学习率
+→ ack 回到 MCP」,以及不可热改的键带着理由出现在 ack 里。
+
+控制面本身的用例在 core 侧,同样不需要 torch:
+
+```bash
+python3 core/tests/test_runtime_control.py
+```
 
 ## 与旧 `agent/` 目录的关系
 

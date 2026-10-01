@@ -17,6 +17,7 @@ import functools
 import inspect
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 if __package__ in (None, ""):  # `python mcp_server/server.py`:补上包上下文
@@ -33,6 +34,7 @@ except ImportError:  # MCP SDK 1.x
     from mcp.server.fastmcp.exceptions import ToolError as _ToolError
 
 from . import __version__
+from . import control as _control
 from .config import ExperimentConfig
 from .errors import McpToolError
 from .paths import RepoLayout
@@ -40,7 +42,7 @@ from .results import list_artifacts as _list_artifacts
 from .results import list_work_dirs as _list_work_dirs
 from .results import read_results as _read_results
 from .results import tail_log as _tail_log
-from .runs import RunLauncher, RunStore
+from .runs import STATUS_RUNNING, RunLauncher, RunStore
 
 INSTRUCTIONS = """OpenCSLR 实验管理服务。
 
@@ -103,10 +105,19 @@ def configure(root=None):
     layout = RepoLayout.discover(root)
     layout.require_entries()
     store = RunStore(layout.runs_dir)
+    config = ExperimentConfig(layout)
+    launcher = RunLauncher(layout, store)
     _STATE["layout"] = layout
-    _STATE["config"] = ExperimentConfig(layout)
+    _STATE["config"] = config
     _STATE["store"] = store
-    _STATE["launcher"] = RunLauncher(layout, store)
+    _STATE["launcher"] = launcher
+    # 清理上次服务留下的临时运行配置(只保留仍在跑的运行对应的那些)
+    active = [
+        record.get("run_id")
+        for record in launcher.list_runs(limit=200)
+        if record.get("status") == STATUS_RUNNING
+    ]
+    _STATE["swept_ephemeral"] = config.sweep_ephemeral_configs(active)
     return layout
 
 
@@ -214,6 +225,125 @@ def resolve_experiment(name: str, overrides: Optional[Dict[str, Any]] = None) ->
     }
 
 
+# ====================================================================== 调参
+
+# 每类键在「能不能热改」上的说明模板(具体理由来自 core 的规则表)
+_CHANGE_HINT_STARTUP = "启动前改:launch_experiment(overrides=...) 或 create_experiment"
+_CHANGE_HINT_HOT = "也可在训练中途改:set_hyperparameters(run_id, overrides)"
+
+
+@tool()
+def get_hyperparameters(name: str) -> Dict[str, Any]:
+    """列出这个实验的全部超参数:当前生效值、类型/取值域、以及能否中途热改。
+
+    调参前先看这个,别靠猜键名:清单与取值域来自真实的 main.py 参数表与
+    ConfigManager 规则表;当前值来自真实的初始化链。
+
+    返回里每条参数带:
+    - current: 当前生效值
+    - hot: 能否在训练中途改(True/False;None 表示当前 core 不支持热改)
+    - hot_note / change_note: 热改时的说明,或不能热改的原因
+
+    Args:
+        name: 实验名(见 list_experiments)。
+    """
+    config = _component("config")
+    if name not in config.experiment_names():
+        raise McpToolError(
+            f"实验 {name!r} 不存在;可用实验: {config.experiment_names()}"
+        )
+
+    schema = config.hyperparameters(name)
+    if not schema.get("ok"):
+        raise McpToolError(f"读取超参数清单失败: {schema.get('error')}")
+
+    hot = schema.get("hot") or {}
+    hot_keys = hot.get("keys")
+    hot_set = set(hot_keys or [])
+    descriptions = hot.get("descriptions") or {}
+    reasons = hot.get("reasons") or {}
+
+    resolution = schema.get("resolution") or {}
+    effective = resolution.get("effective") if resolution.get("ok") else {}
+    effective = effective or {}
+
+    def annotate(key, value):
+        """给一个键标上「能不能热改」。
+
+        字典类键(optimizer_args / feeder_args)整体不在可热改列表里,但它的子键
+        可能可以(optimizer_args.base_lr)。这时不能简单报「只能在启动前设置」——
+        那会把调用方带偏,所以单列成 ``partial`` 并给出可热改的子键。
+        """
+        children = sorted(item for item in hot_set if item.startswith(f"{key}."))
+        if hot_keys is None:
+            return {
+                "current": value,
+                "hot": None,
+                "hot_keys": [],
+                "hot_note": None,
+                "change_note": "当前 core 未提供运行时控制面,只能启动前改",
+            }
+        if key in hot_set:
+            return {
+                "current": value,
+                "hot": True,
+                "hot_keys": [key],
+                "hot_note": descriptions.get(key),
+                "change_note": _CHANGE_HINT_HOT,
+            }
+        if children:
+            names = ", ".join(child.split(".", 1)[1] for child in children)
+            return {
+                "current": value,
+                "hot": "partial",
+                "hot_keys": children,
+                "hot_note": ";".join(
+                    filter(None, (descriptions.get(child) for child in children))
+                ),
+                "change_note": "部分子键可在训练中途改: {};其余键{}".format(
+                    names, _CHANGE_HINT_STARTUP
+                ),
+            }
+        return {
+            "current": value,
+            "hot": False,
+            "hot_keys": [],
+            "hot_note": descriptions.get(key),
+            "change_note": "训练中途不可改: {};{}".format(
+                reasons.get(key, "不在可热改列表里"), _CHANGE_HINT_STARTUP
+            ),
+        }
+
+    arguments = []
+    for item in schema.get("arguments", []):
+        key = item["name"]
+        arguments.append({**item, **annotate(key, effective.get(key, item.get("default")))})
+
+    nested = {}
+    for section_name, info in (schema.get("nested") or {}).items():
+        nested[section_name] = {**info, **annotate(section_name, effective.get(section_name))}
+
+    section = config.exp_doc().get(name) if isinstance(config.exp_doc().get(name), dict) else {}
+    return {
+        "experiment": name,
+        "network": section.get("network"),
+        "dataset": section.get("dataset"),
+        "config_path": str(config.layout.exp_config),
+        "resolution_ok": bool(resolution.get("ok")),
+        "resolution_error": resolution.get("error"),
+        "hot_keys": sorted(hot_set) if hot_keys is not None else None,
+        "valid_optimizers": schema.get("valid_optimizers"),
+        "arguments": arguments,
+        "nested": nested,
+        "how_to_change": {
+            "启动前(推荐,会记进运行记录)": "launch_experiment(name, overrides={...})",
+            "训练中途": "set_hyperparameters(run_id, {key: value}),再用 get_control_state 回读 ack",
+            "写进 exp.yaml": "create_experiment(name, network, dataset, overrides={...})",
+            "先预览": "resolve_experiment(name, overrides={...})",
+        },
+    }
+
+
 # ====================================================================== 跑实验
 
 
@@ -266,6 +396,7 @@ def launch_experiment(
     work_dir: Optional[str] = None,
     device: Optional[str] = None,
     extra_args: Optional[List[str]] = None,
+    overrides: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """启动一个实验(默认训练),立刻返回 run_id。
@@ -274,6 +405,11 @@ def launch_experiment(
     tail_log 看日志、get_results 看 WER。使用 GPU 前会先用真实的配置链校验
     一次(配置有问题会直接报错,不会浪费 GPU 时间)。
 
+    传了 overrides 时,本次运行使用 core/configs 下一个临时配置(不修改
+    exp.yaml):覆盖项按 YAML 语义深合并,所以只改一个嵌套键不会丢掉网络节里
+    的兄弟键。临时配置在进程结束后自动清理,快照留在运行记录目录里。
+    每次启动都会带一个控制文件,因此运行中可以 set_hyperparameters 热改。
+
     Args:
         name: 实验名(见 list_experiments)。
         phase: train 训练 / test 只做评估(需配合 extra_args 里的 --load-weights)。
@@ -281,41 +417,71 @@ def launch_experiment(
         device: 覆盖使用的 GPU,如 "0" 或 "0,1"。
         extra_args: 透传给 main.py 的其它参数,逐个 token 写成列表,
             例如 ["--batch-size", "2", "--load-weights", "/path/best_model.pt"]。
-            字典类参数请改用 create_experiment 写入 YAML。
-        dry_run: 为 True 时只返回将要执行的命令,不真的启动。
+            字典类参数不要写在这里(会被整块替换),请用 overrides。
+        overrides: 超参数覆盖,键同 main.py 参数名,可嵌套,
+            例如 {"optimizer_args": {"base_lr": 0.0001}, "num_epoch": 40}。
+            先用 get_hyperparameters / resolve_experiment 看能改什么。
+        dry_run: 为 True 时只返回将要执行的命令与生效值,不启动、不落盘。
     """
     config = _component("config")
     launcher = _component("launcher")
+    store = _component("store")
 
     if name not in config.experiment_names():
         raise McpToolError(f"实验 {name!r} 不存在;可用实验: {config.experiment_names()}")
+    if overrides is not None and not isinstance(overrides, dict):
+        raise McpToolError("overrides 必须是映射(超参数名 -> 值)")
 
-    # 启动前用真实配置链校验:配置错误在这里就报,不等到占上 GPU
+    run_id = store.new_id(name)
+    config_path = None
+    materialized = None
+    if overrides:
+        if dry_run:
+            # dry-run 不落盘:只算出「会写哪个临时配置」
+            config_path = config.ephemeral_config_path(run_id)
+        else:
+            materialized = config.materialize_run_config(name, overrides, run_id=run_id)
+            config_path = Path(materialized["path"])
+
+    # 启动前用真实配置链校验:有覆盖就校验临时配置本身,配置错误在这里就报,
+    # 不等到占上 GPU。dry_run 不落盘,所以直接拿 overrides 去校验 exp.yaml 里
+    # 的实验(与 materialize 的深合并语义一致)。
     warning = None
     effective_work_dir = work_dir
     try:
-        verdict = config.resolve(name)
+        verdict = config.resolve(
+            name, overrides=overrides, config_path=None if dry_run else config_path
+        )
     except McpToolError as exc:
         verdict = None
         warning = f"跳过启动前校验({exc})"
+    if verdict is not None and not verdict.get("ok"):
+        _discard_materialized(config, materialized)
+        raise McpToolError(
+            f"实验 {name!r} 的配置校验失败: {verdict.get('error')};"
+            "可先用 resolve_experiment 定位问题,不要带着这个错误启动训练"
+        )
     if verdict is not None:
-        if not verdict.get("ok"):
-            raise McpToolError(
-                f"实验 {name!r} 的配置校验失败: {verdict.get('error')};"
-                "可先用 resolve_experiment 定位问题,不要带着这个错误启动训练"
-            )
         effective_work_dir = work_dir or verdict["effective"].get("work_dir")
 
-    command = launcher.build_training_command(name, phase, work_dir, device, extra_args)
+    control_file = _control.control_path(store.runs_dir, run_id)
+    command = launcher.build_training_command(
+        name, phase, work_dir, device, extra_args,
+        config_path=config_path, control_file=control_file,
+    )
     if dry_run:
         return {
             "dry_run": True,
+            "run_id": run_id,
             "experiment": name,
             "phase": phase,
             "command": command,
             "command_str": " ".join(command),
             "cwd": str(_layout().core_dir),
             "work_dir": effective_work_dir,
+            "overrides": overrides or {},
+            "would_write_config": str(config_path) if config_path else None,
+            "control_file": str(control_file),
             "warning": warning,
         }
 
@@ -323,12 +489,31 @@ def launch_experiment(
         _ensure_directory(_layout().resolve_work_dir(work_dir))
 
     record = launcher.launch_training(
-        name, phase=phase, work_dir=work_dir, device=device, extra_args=extra_args
+        name, phase=phase, work_dir=work_dir, device=device, extra_args=extra_args,
+        config_path=config_path, control_file=control_file, run_id=run_id,
+        ephemeral_config=config_path if materialized else None,
+        config_snapshot=(materialized or {}).get("snapshot"),
     )
     record["effective_work_dir"] = effective_work_dir
     record["warning"] = warning
+    record["overrides"] = (materialized or {}).get("overrides") or overrides or {}
     _component("store").save(record)
-    return _run_summary(record)
+    summary = _run_summary(record)
+    summary["overrides"] = record["overrides"]
+    summary["config_snapshot"] = record.get("config_snapshot")
+    return summary
+
+
+def _discard_materialized(config, materialized):
+    """启动前校验失败时,把已经写出的临时配置删掉,不留垃圾。"""
+    if materialized:
+        config.cleanup_ephemeral_config(materialized.get("path"))
+        snapshot = materialized.get("snapshot")
+        if snapshot:
+            try:
+                Path(snapshot).unlink()
+            except OSError:
+                pass
 
 
 @tool()
@@ -384,6 +569,94 @@ def stop_run(run_id: str, force: bool = False) -> Dict[str, Any]:
     return _component("launcher").stop(run_id, force=force)
 
 
+@tool()
+def set_hyperparameters(run_id: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """训练进行中改超参数(热改):写控制文件,训练进程下一轮轮询时应用。
+
+    能热改的是「下一轮还能重新读」的那些:学习率/权重衰减/衰减 epoch、
+    loss_weights、num_epoch、save/eval/log_interval、print_log,以及
+    feeder_args 里的两个评估开关。要改网络结构、batch_size、device 这类
+    绑死在启动阶段的参数,只能用 launch_experiment 重新启动——具体以
+    get_hyperparameters 给出的 hot 标记为准。
+
+    写入后必须用 get_control_state 回读 ack:训练进程只认新 revision,
+    被拒绝的键(不可热改/类型不对)会在 ack.ignored 里给出理由。
+
+    Args:
+        run_id: 运行 id(见 list_runs;必须是本服务启动的训练)。
+        overrides: 超参数名 -> 值,例如 {"optimizer_args": {"base_lr": 0.0002}}
+            或简写 {"base_lr": 0.0002}。
+    """
+    launcher = _component("launcher")
+    record = launcher.status(run_id)
+
+    if record.get("kind") != "train":
+        raise McpToolError(
+            f"运行 {run_id} 是 {record.get('kind')} 类型,不支持热改超参数"
+        )
+    if not record.get("pid_alive"):
+        raise McpToolError(
+            f"运行 {run_id} 的进程已不在(status={record.get('status')});热改不会生效。"
+            "要带着新超参数重跑,请用 launch_experiment(name, overrides={...})"
+        )
+    control_file = record.get("control_file")
+    if not control_file:
+        raise McpToolError(
+            f"运行 {run_id} 没有控制文件(不是通过 MCP 启动的);无法热改"
+        )
+
+    written = _control.write_overrides(control_file, overrides)
+    return {
+        "run_id": run_id,
+        "revision": written["revision"],
+        "control_file": written["path"],
+        "overrides": overrides,
+        "note": (
+            "已写入控制文件;训练进程在下一个轮询点应用。"
+            "用 get_control_state(run_id) 回读 ack 确认哪些键生效、哪些被拒绝"
+        ),
+    }
+
+
+@tool()
+def get_control_state(run_id: str) -> Dict[str, Any]:
+    """查看某次运行的运行时控制状态:最后一次控制指令,以及训练进程的回执。
+
+    ack.applied 是真正生效的键,ack.ignored 是被拒绝的键与理由(不可热改、
+    类型不对等)。pending 为 True 表示训练进程还没轮到轮询这次改动。
+
+    Args:
+        run_id: 运行 id。
+    """
+    launcher = _component("launcher")
+    record = launcher.status(run_id)
+    control_file = record.get("control_file")
+
+    summary = _run_summary(record)
+    summary["overrides"] = record.get("overrides")
+    if not control_file:
+        summary["note"] = "这次运行没有控制文件(不是通过 MCP 启动的)"
+        return summary
+
+    state = _control.state(control_file)
+    summary.update(
+        {
+            "control_file": state["control_file"],
+            "ack_file": state["ack_file"],
+            "last_command": state["control"],
+            "ack": state["ack"],
+            "pending": state["pending"],
+        }
+    )
+    if state["pending"] is False:
+        summary["note"] = "最新一次改动已被训练进程处理,见 ack.applied / ack.ignored"
+    elif state["pending"]:
+        summary["note"] = "改动已写入,等着训练进程在下一个轮询点读取"
+    else:
+        summary["note"] = "还没有写入过控制指令"
+    return summary
+
+
 # ====================================================================== 看结果
 
 
@@ -433,6 +706,17 @@ def get_run_status(run_id: str, log_lines: int = 30) -> Dict[str, Any]:
             summary["checkpoints"] = [item["name"] for item in artifacts["checkpoints"][:5]]
         except McpToolError as exc:
             summary["results_note"] = f"读取结果失败: {exc}"
+
+    # 热改通道一并带上:一眼看到「改过什么、生效了没有」
+    control_file = record.get("control_file")
+    if control_file:
+        state = _control.state(control_file)
+        summary["control"] = {
+            "control_file": state["control_file"],
+            "last_command": state["control"],
+            "ack": state["ack"],
+            "pending": state["pending"],
+        }
     return summary
 
 
@@ -510,6 +794,9 @@ def _run_summary(record):
         "finished_at": record.get("finished_at"),
         "work_dir": record.get("work_dir"),
         "command_str": record.get("command_str"),
+        "config_path": record.get("config_path"),
+        "config_snapshot": record.get("config_snapshot"),
+        "control_file": record.get("control_file"),
         "log_path": record.get("log_path"),
         "note": record.get("note"),
         "warning": record.get("warning"),

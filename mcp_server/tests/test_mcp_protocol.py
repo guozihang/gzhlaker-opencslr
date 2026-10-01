@@ -26,10 +26,13 @@ EXPECTED_TOOLS = {
     "get_experiment_config",
     "list_options",
     "resolve_experiment",
+    "get_hyperparameters",
     "create_experiment",
     "launch_experiment",
     "launch_preprocess",
     "stop_run",
+    "set_hyperparameters",
+    "get_control_state",
     "list_runs",
     "get_run_status",
     "get_results",
@@ -45,16 +48,21 @@ READ_ONLY_CALLS = [
     ("get_experiment_config", {"name": "vac"}),
     ("resolve_experiment", {"name": "vac"}),
     ("resolve_experiment", {"name": "vac", "overrides": {"num_epoch": 3}}),
+    ("get_hyperparameters", {"name": "vac"}),
     ("list_runs", {}),
     ("list_work_dirs", {}),
     ("get_results", {"work_dir": "./work_dir/never_ran/"}),
     ("launch_experiment", {"name": "vac", "dry_run": True}),
+    ("launch_experiment", {"name": "vac", "overrides": {"num_epoch": 3}, "dry_run": True}),
 ]
 
 # name, arguments, 期望错误信息里出现的关键词
 ERROR_CALLS = [
     ("get_experiment_config", {"name": "does_not_exist"}, "不存在"),
+    ("get_hyperparameters", {"name": "does_not_exist"}, "不存在"),
     ("tail_log", {"run_id": "20260101-000000-nonexistent"}, "找不到运行记录"),
+    ("get_control_state", {"run_id": "20260101-000000-nonexistent"}, "找不到运行记录"),
+    ("set_hyperparameters", {"run_id": "20260101-000000-nonexistent", "overrides": {"num_epoch": 3}}, "找不到运行记录"),
     ("create_experiment", {"name": "x", "network": "no_such_net", "dataset": "phoenix2014"}, "network"),
     ("launch_experiment", {"name": "no_such_exp"}, "不存在"),
 ]

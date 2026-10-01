@@ -431,7 +431,8 @@ Tracks: loss curves, WER per epoch, GPU memory, learning rate, sample statistics
 
 仓库自带一个 [MCP](https://modelcontextprotocol.io) 服务,把实验管理能力暴露成标准工具,
 让**已有的智能体**(Claude Code、IDE 助手等)直接调用工具来管理本仓库的实验:
-查看实验清单、预览实际生效的配置、新建实验、启动/停止训练、追踪进度、读取 WER 与 checkpoint。
+查看实验清单、预览实际生效的配置、**改任意超参数、起训练、训练中途热改超参数**、
+追踪进度、读取 WER 与 checkpoint。
 
 仓库本身不内置智能体、不调用任何大模型 API——决策在客户端那侧做,服务只负责把仓库能力
 可靠地暴露出去。
@@ -447,6 +448,13 @@ claude mcp add opencslr -- python3 -m mcp_server --root "$PWD"
 **配置只有一个真相来源。** 工具里的配置校验不是另写一份规则,而是在子进程里跑真实的
 `ArgumentManager` + `ConfigManager`,因此 `resolve_experiment` 的结论与真正启动时一致——
 配置错误在占上 GPU 之前就会报出来。
+
+**超参数处处可改。** `get_hyperparameters` 列出全部超参数、当前值与取值域;
+启动前用 `launch_experiment(overrides=...)` 覆盖(按 YAML 语义深合并,落在
+`core/configs/` 下的临时配置里,不动 `exp.yaml`,跑完自动清理、快照留档);
+训练进行中用 `set_hyperparameters(run_id, ...)` 热改学习率、损失权重、`num_epoch`
+等,再用 `get_control_state` 回读训练进程的 ack。改不了的键(网络结构、batch_size
+这类绑死启动阶段的)不会被静默忽略,而是连同理由回到调用方。
 
 ## Documentation
 

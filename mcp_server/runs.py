@@ -30,7 +30,7 @@ STATUS_STOPPED = "stopped"    # 被 stop_run 主动停止
 STATUS_UNKNOWN = "unknown"    # 进程已不在,但没有记录到退出码(服务重启过)
 
 # 由工具参数决定,不接受用 extra_args 重复指定
-RESERVED_FLAGS = ("--config", "--exp", "--work-dir", "--phase", "--device")
+RESERVED_FLAGS = ("--config", "--exp", "--work-dir", "--phase", "--device", "--control-file")
 
 _STOP_GRACE_SECONDS = 15.0
 _KILL_GRACE_SECONDS = 5.0
@@ -109,18 +109,25 @@ class RunLauncher:
     # -------------------------------------------------------------- 命令构造
 
     def build_training_command(self, experiment, phase="train", work_dir=None,
-                               device=None, extra_args=None):
-        """拼出 ``python main.py --config configs/exp.yaml --exp <name> ...``。"""
+                               device=None, extra_args=None, config_path=None,
+                               control_file=None):
+        """拼出 ``python main.py --config <exp 配置> --exp <name> ...``。
+
+        config_path 用于「带超参数覆盖的临时配置」;control_file 一并传给
+        main.py,训练进程据此轮询中途热改。
+        """
         command = [
             self.layout.python,
             "main.py",
             "--config",
-            str(self.layout.exp_config),
+            str(config_path or self.layout.exp_config),
             "--exp",
             experiment,
             "--phase",
             phase,
         ]
+        if control_file:
+            command += ["--control-file", str(control_file)]
         if work_dir:
             command += ["--work-dir", str(work_dir)]
         if device is not None:
@@ -168,8 +175,18 @@ class RunLauncher:
     # -------------------------------------------------------------- 启动
 
     def launch_training(self, experiment, phase="train", work_dir=None, device=None,
-                        extra_args=None, log_path=None):
-        command = self.build_training_command(experiment, phase, work_dir, device, extra_args)
+                        extra_args=None, log_path=None, config_path=None,
+                        control_file=None, run_id=None, ephemeral_config=None,
+                        config_snapshot=None):
+        run_id = run_id or self.store.new_id(experiment)
+        # 默认给每次运行都开一个控制文件:这样任何一次由 MCP 启动的训练都能
+        # 被中途热改,而不是「想起来要改的时候发现没通道」。
+        if control_file is None:
+            control_file = self.store.runs_dir / f"{run_id}.control.json"
+        command = self.build_training_command(
+            experiment, phase, work_dir, device, extra_args,
+            config_path=config_path, control_file=control_file,
+        )
         return self._launch(
             kind="train" if phase == "train" else "eval",
             label=experiment,
@@ -180,6 +197,13 @@ class RunLauncher:
             extra_args=list(extra_args or []),
             log_path=log_path,
             cwd=self.layout.core_dir,
+            run_id=run_id,
+            record_extra={
+                "config_path": str(config_path or self.layout.exp_config),
+                "control_file": str(control_file) if control_file else None,
+                "ephemeral_config": str(ephemeral_config) if ephemeral_config else None,
+                "config_snapshot": str(config_snapshot) if config_snapshot else None,
+            },
         )
 
     def launch_preprocess(self, dataset, dataset_root=None, process_image=False,
@@ -198,8 +222,8 @@ class RunLauncher:
         )
 
     def _launch(self, kind, label, command, experiment, phase, work_dir,
-                extra_args, log_path, cwd):
-        run_id = self.store.new_id(label)
+                extra_args, log_path, cwd, run_id=None, record_extra=None):
+        run_id = run_id or self.store.new_id(label)
         self.store.runs_dir.mkdir(parents=True, exist_ok=True)
         log_path = Path(log_path) if log_path else self.store.runs_dir / f"{run_id}.log"
 
@@ -221,6 +245,7 @@ class RunLauncher:
             "started_at": started_at,
             "finished_at": None,
         }
+        record.update(record_extra or {})
 
         with open(log_path, "ab") as log_stream:
             try:
@@ -296,7 +321,28 @@ class RunLauncher:
             record["status"] = STATUS_EXITED
         else:
             record["status"] = STATUS_FAILED
+        self._cleanup_ephemeral(record)
         self.store.save(record)
+
+    def _cleanup_ephemeral(self, record):
+        """删掉本次运行的临时配置。
+
+        配置只在进程启动时被读一次,进程结束后就没用了;运行记录目录里还留着
+        快照(``config_snapshot``),所以这次运行到底用了什么配置仍然查得到。
+        只删本服务写在 core/configs 下的 ``_mcp_run_*`` 文件。
+        """
+        path = record.get("ephemeral_config")
+        if not path:
+            return
+        candidate = Path(path)
+        if candidate.parent != self.layout.configs_dir:
+            return
+        if not candidate.name.startswith("_mcp_run_"):
+            return
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
 
     # -------------------------------------------------------------- 停止
 
@@ -325,6 +371,7 @@ class RunLauncher:
             record["status"] = STATUS_STOPPED
             record["finished_at"] = record.get("finished_at") or _utc_now()
             record["note"] = "已停止(SIGKILL)" if force and record.get("exit_code") in (-9, 137) else "已停止"
+            self._cleanup_ephemeral(record)
             self.store.save(record)
         else:
             record["note"] = (

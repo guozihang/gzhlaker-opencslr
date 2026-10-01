@@ -136,6 +136,27 @@ class CreateTests(unittest.TestCase):
         self.assertEqual(doc["vac"]["num_epoch"], 7)
         self.assertEqual(doc["corrnet"], self.original_doc["corrnet"])
 
+    def test_nested_override_keeps_network_siblings(self):
+        """回归:直接往 exp 节写嵌套字典会整体替换网络节的同名字典。
+
+        只改 model_args.use_bn 时,ConfigManager 的浅合并会把 num_classes /
+        c2d_type / kernel_size / stride 一起丢掉,于是「改了一个超参数,却换来了
+        另一个模型」。
+        """
+        network_args = self.config.network_doc()["vac"]["model_args"]
+        self.config.create_experiment(
+            name="vac_nested",
+            network="vac",
+            dataset="phoenix2014",
+            overrides={"model_args": {"use_bn": 0}},
+        )
+        verdict = self.config.resolve("vac_nested")
+        self.assertTrue(verdict["ok"], verdict)
+        effective = verdict["effective"]["model_args"]
+        self.assertEqual(effective["use_bn"], 0)
+        for key in ("num_classes", "c2d_type", "kernel_size", "stride"):
+            self.assertEqual(effective[key], network_args[key], f"{key} 被丢掉了")
+
     def test_unknown_argument_key_is_rejected(self):
         with self.assertRaises(McpToolError) as ctx:
             self.config.create_experiment(
@@ -160,6 +181,90 @@ class CreateTests(unittest.TestCase):
         for name in ("_private", "1abc", "with space"):
             with self.assertRaises(McpToolError):
                 self.config.create_experiment(name=name, network="vac", dataset="phoenix2014")
+
+
+class MaterializeTests(unittest.TestCase):
+    """临时运行配置:带超参数覆盖启动,但不动 exp.yaml。"""
+
+    def setUp(self):
+        self.layout = make_temp_repo()
+        self.config = ExperimentConfig(self.layout)
+        self.original_text = self.layout.exp_config.read_text(encoding="utf-8")
+
+    def tearDown(self):
+        remove_tree(self.layout.root)
+
+    def test_exp_yaml_is_never_touched(self):
+        self.config.materialize_run_config("vac", {"num_epoch": 3}, run_id="r-untouched")
+        self.assertEqual(
+            self.layout.exp_config.read_text(encoding="utf-8"),
+            self.original_text,
+            "materialize 不应改动 exp.yaml",
+        )
+
+    def test_temp_config_sits_next_to_exp_yaml(self):
+        """必须与 exp.yaml 同目录:ConfigManager 按配置所在目录找另外两个配置。"""
+        result = self.config.materialize_run_config("vac", {"num_epoch": 3}, run_id="r-loc")
+        path = Path(result["path"])
+        self.assertEqual(path.parent, self.layout.configs_dir)
+        self.assertTrue(path.name.startswith("_mcp_run_"))
+        self.assertTrue(path.is_file())
+        self.assertEqual(result["section"], "vac")
+
+    def test_nested_override_deep_merges_and_is_self_contained(self):
+        network_args = self.config.network_doc()["vac"]["model_args"]
+        result = self.config.materialize_run_config(
+            "vac", {"model_args": {"use_bn": 0}}, run_id="r-nested"
+        )
+        section = yaml.safe_load(Path(result["path"]).read_text(encoding="utf-8"))["vac"]
+        self.assertEqual(section["model_args"]["use_bn"], 0)
+        self.assertEqual(section["model_args"]["num_classes"], network_args["num_classes"])
+        # 自包含:引用字段与展开后的网络参数都在里面,不依赖 anchor
+        self.assertEqual(section["network"], "vac")
+        self.assertEqual(section["dataset"], "phoenix2014")
+        self.assertNotIn("<<", Path(result["path"]).read_text(encoding="utf-8"))
+
+    def test_temp_config_passes_the_real_config_chain(self):
+        result = self.config.materialize_run_config(
+            "vac",
+            {"num_epoch": 3, "optimizer_args": {"base_lr": 0.0002}},
+            run_id="r-resolve",
+        )
+        verdict = self.config.resolve("vac", config_path=result["path"])
+        self.assertTrue(verdict["ok"], verdict)
+        effective = verdict["effective"]
+        self.assertEqual(effective["num_epoch"], 3)
+        self.assertEqual(effective["optimizer_args"]["base_lr"], 0.0002)
+        # 没被覆盖的兄弟键来自 network 节,必须还在
+        self.assertEqual(effective["optimizer_args"]["optimizer"], "Adam")
+        self.assertEqual(effective["optimizer_args"]["weight_decay"], 0.0001)
+
+    def test_snapshot_is_kept_for_reproducibility(self):
+        result = self.config.materialize_run_config("vac", {"num_epoch": 3}, run_id="r-snap")
+        snapshot = Path(result["snapshot"])
+        self.assertTrue(snapshot.is_file())
+        self.assertEqual(snapshot.parent, self.layout.runs_dir)
+        self.assertEqual(
+            snapshot.read_text(encoding="utf-8"),
+            Path(result["path"]).read_text(encoding="utf-8"),
+        )
+
+    def test_unknown_override_key_is_rejected(self):
+        with self.assertRaises(McpToolError):
+            self.config.materialize_run_config("vac", {"no_such_key": 1}, run_id="r-bad")
+        with self.assertRaises(McpToolError):
+            self.config.materialize_run_config("not_an_experiment", {}, run_id="r-bad")
+
+    def test_cleanup_only_removes_its_own_temp_files(self):
+        kept = self.config.materialize_run_config("vac", {"num_epoch": 1}, run_id="keep")
+        dropped = self.config.materialize_run_config("vac", {"num_epoch": 2}, run_id="drop")
+
+        removed = self.config.sweep_ephemeral_configs(active_run_ids=["keep"])
+        self.assertEqual(removed, [Path(dropped["path"]).name])
+        self.assertTrue(Path(kept["path"]).is_file())
+        # exp.yaml 永远不属于清理范围
+        self.assertFalse(self.config.cleanup_ephemeral_config(self.layout.exp_config))
+        self.assertTrue(self.layout.exp_config.is_file())
 
 
 class SectionRangeTests(unittest.TestCase):

@@ -6,7 +6,10 @@
 
 - 看清有哪些实验、各自引用哪个网络/数据集(``list_experiments``)
 - 拿到某个实验「声明了什么」以及「实际生效的配置是什么」
-- 新建/更新实验节(``create_experiment``)
+- 新建实验节(``create_experiment``)
+- 为「这次运行」生成带超参数覆盖的临时配置(``materialize_run_config``),
+  不动 exp.yaml
+- 导出超参数清单与取值域(``hyperparameters``)
 
 「实际生效的配置」不在这一层重算:优先级与校验规则只存在于 core/manager,
 复刻一份必然漂移,所以委托给 ``core_probe.py`` 跑真实的初始化链。
@@ -31,6 +34,12 @@ _ANCHOR_PREFIX = "_"
 
 # exp.yaml 里供各实验复用的公共节;新建实验时优先继承它,保持与现有节一致的写法
 _COMMON_SECTION = "_common_experiment"
+
+# 临时运行配置的文件名前缀。必须写在 core/configs/ 下:ConfigManager 按配置
+# 所在目录去找 network.yaml 与 dataset.yaml,放到别处会解析不到。下划线开头
+# 也保证它不会被 list_experiments 当成一个实验。
+EPHEMERAL_PREFIX = "_mcp_run_"
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _PROBE_PATH = Path(__file__).resolve().with_name("core_probe.py")
 _PROBE_TIMEOUT_SECONDS = 180
@@ -198,7 +207,14 @@ class ExperimentConfig:
 
     # ------------------------------------------------------------------ 解析
 
-    def resolve(self, name, overrides=None, timeout=_PROBE_TIMEOUT_SECONDS):
+    def _inherited_section(self, section, network_section):
+        """复现 ConfigManager 的合并结果:网络节打底,实验节覆盖(浅合并)。"""
+        merged = dict(network_section or {})
+        merged.update(section or {})
+        merged.pop("network", None)
+        return merged
+
+    def resolve(self, name, overrides=None, timeout=_PROBE_TIMEOUT_SECONDS, config_path=None):
         """跑真实的初始化链,得到实际生效的配置与校验结论。
 
         Args:
@@ -206,15 +222,33 @@ class ExperimentConfig:
             overrides: 覆盖项(与 exp.yaml 同名的参数);字典类配置按 YAML
                 的语义深合并。
             timeout: 子进程超时(秒)。
+            config_path: 要解析的配置文件;默认 exp.yaml。生成临时运行配置后
+                用它校验「这次真正要跑的东西」。
 
         Returns:
             dict: ``core_probe`` 的响应,``ok`` 为 False 时带 ``error`` 说明。
         """
         request = {
             "exp": name,
-            "config": str(self.layout.exp_config),
+            "config": str(config_path or self.layout.exp_config),
             "overrides": overrides or {},
         }
+        return self._probe(request, name, timeout)
+
+    def hyperparameters(self, name, config_path=None):
+        """导出超参数清单:能改哪些、当前生效值、类型/取值域、能否热改。
+
+        schema 与当前值都来自真实 parser 与真实初始化链(一次子进程搞定)。
+        """
+        request = {
+            "mode": "schema",
+            "exp": name,
+            "config": str(config_path or self.layout.exp_config),
+        }
+        return self._probe(request, name)
+
+    def _probe(self, request, label, timeout=_PROBE_TIMEOUT_SECONDS):
+        """把请求交给子进程里的真实初始化链,回传 JSON 响应。"""
         try:
             proc = subprocess.run(
                 [self.layout.python, str(_PROBE_PATH)],
@@ -230,13 +264,13 @@ class ExperimentConfig:
                 "可用环境变量 OPENCSLR_PYTHON 指向训练环境里的 python"
             )
         except subprocess.TimeoutExpired:
-            raise McpToolError(f"解析实验 {name!r} 超时(>{timeout}s)")
+            raise McpToolError(f"解析实验 {label!r} 超时(>{timeout}s)")
 
         response = _last_json_line(proc.stdout)
         if response is None:
             detail = (proc.stderr or proc.stdout or "").strip()[-800:]
             raise McpToolError(
-                f"解析实验 {name!r} 的子进程没有返回结果(退出码 {proc.returncode}): {detail}"
+                f"解析实验 {label!r} 的子进程没有返回结果(退出码 {proc.returncode}): {detail}"
             )
         return response
 
@@ -318,6 +352,15 @@ class ExperimentConfig:
                 f"可用键: {sorted(allowed)}"
             )
 
+        # 嵌套字典会整体替换网络节里的同名字典(ConfigManager 是浅合并),所以
+        # 字典类覆盖项要先按「继承来的基值」铺开再合并,否则只改一个嵌套键
+        # (如 model_args.use_bn)会把 num_classes 之类的兄弟键一起丢掉。
+        inherited = self._inherited_section(
+            exp_doc.get(_COMMON_SECTION) if isinstance(exp_doc.get(_COMMON_SECTION), dict) else {},
+            networks.get(network) or {},
+        )
+        fields = _merge_nested_overrides(fields, inherited)
+
         text = self.layout.exp_config.read_text(encoding="utf-8")
         if not text.endswith("\n"):
             text += "\n"
@@ -390,12 +433,166 @@ class ExperimentConfig:
         lines.extend(("  " + line) if line.strip() else "" for line in body.splitlines())
         return "\n".join(lines) + "\n"
 
+    # -------------------------------------------------------------- 临时运行配置
+
+    def ephemeral_config_path(self, run_id):
+        """临时运行配置的路径(与 exp.yaml 同目录,ConfigManager 才能找到另外两个配置)。"""
+        if not _RUN_ID_PATTERN.match(str(run_id)):
+            raise McpToolError(f"非法的 run_id: {run_id!r}")
+        return self.layout.configs_dir / f"{EPHEMERAL_PREFIX}{run_id}.yaml"
+
+    def materialize_run_config(self, name, overrides=None, run_id=None):
+        """把「某个实验 + 超参数覆盖」落成一个自包含的临时配置,不动 exp.yaml。
+
+        覆盖项按 YAML 语义深合并(与 ``resolve_experiment`` 的 overrides 一致),
+        所以只改一个嵌套键不会丢掉网络节里的兄弟键。生成的配置展开全部 anchor,
+        并把 network 节里实际生效的键一并写进去,因此它本身就是这次运行的快照:
+        即使之后 network.yaml 改了,这次运行的配置也可复现。
+
+        Args:
+            name: 实验名(临时配置里仍然用它作为节名)。
+            overrides: 超参数覆盖项,键同 main.py 参数名;可为嵌套字典。
+            run_id: 运行 id,用于生成唯一文件名。
+
+        Returns:
+            dict: 临时配置路径、快照路径(放在运行记录目录)与生效覆盖项。
+        """
+        if not isinstance(overrides, dict):
+            raise McpToolError("overrides 必须是映射(超参数名 -> 值)")
+        if not run_id:
+            raise McpToolError("生成临时运行配置需要 run_id")
+
+        exp_doc = self.exp_doc()
+        if name not in exp_doc:
+            raise McpToolError(
+                f"实验 {name!r} 不存在于 {self.layout.exp_config};"
+                f"可用实验: {self.experiment_names()}"
+            )
+        section = exp_doc[name]
+        if not isinstance(section, dict):
+            raise McpToolError(f"实验 {name!r} 的配置节必须是映射")
+
+        network_name = section.get("network")
+        if not network_name:
+            raise McpToolError(f"实验 {name!r} 缺少 network 字段")
+        networks = self.network_doc()
+        if network_name not in networks:
+            raise McpToolError(
+                f"network {network_name!r} 未在 network.yaml 中定义;"
+                f"可用: {sorted(k for k in networks if not str(k).startswith(_ANCHOR_PREFIX))}"
+            )
+        dataset_name = section.get("dataset")
+        if not dataset_name:
+            raise McpToolError(f"实验 {name!r} 缺少 dataset 字段")
+        if dataset_name not in self.dataset_doc():
+            raise McpToolError(
+                f"dataset {dataset_name!r} 未在 dataset.yaml 中定义;"
+                f"可用: {self.list_options()['datasets']}"
+            )
+
+        allowed = self.allowed_argument_names() | {"network", "dataset"}
+        unknown = sorted(set(overrides) - allowed)
+        if unknown:
+            raise McpToolError(
+                f"以下键不是 main.py 的参数: {unknown};可用键: {sorted(allowed)}"
+            )
+
+        inherited = self._inherited_section(section, networks.get(network_name) or {})
+        effective = _deep_merge(inherited, overrides)
+        document = {name: {"network": network_name, **effective}}
+
+        path = self.ephemeral_config_path(run_id)
+        text = yaml.safe_dump(
+            document,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+            indent=2,
+        )
+        _atomic_write(path, text)
+
+        # 运行记录目录里留一份快照:临时配置在进程结束后会被清理,快照保证这次
+        # 运行到底用了什么配置仍然查得到。
+        snapshot = self.layout.runs_dir / f"{run_id}.config.yaml"
+        try:
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(snapshot, text)
+        except OSError:
+            snapshot = None
+
+        return {
+            "run_id": run_id,
+            "path": str(path),
+            "snapshot": str(snapshot) if snapshot else None,
+            "section": name,
+            "network": network_name,
+            "dataset": dataset_name,
+            "overrides": overrides,
+        }
+
+    def cleanup_ephemeral_config(self, path):
+        """删除一个临时运行配置(进程已结束,配置早就读完了)。"""
+        if not path:
+            return False
+        candidate = Path(path)
+        if candidate.parent != self.layout.configs_dir:
+            return False  # 只删自己写在 configs 目录下的临时配置
+        if not candidate.name.startswith(EPHEMERAL_PREFIX):
+            return False
+        try:
+            candidate.unlink()
+            return True
+        except OSError:
+            return False
+
+    def sweep_ephemeral_configs(self, active_run_ids=()):
+        """清掉没有对应存活运行的临时配置(服务重启后的残留)。"""
+        active = {str(item) for item in active_run_ids}
+        removed = []
+        if not self.layout.configs_dir.is_dir():
+            return removed
+        for path in sorted(self.layout.configs_dir.glob(f"{EPHEMERAL_PREFIX}*.yaml")):
+            run_id = path.name[len(EPHEMERAL_PREFIX):-len(".yaml")]
+            if run_id in active:
+                continue
+            if self.cleanup_ephemeral_config(path):
+                removed.append(path.name)
+        return removed
+
 
 def _ordered_items(mapping, preferred):
     """把常用键排在前面,其余键保持原顺序,便于人工阅读导出的实验节。"""
     ordered = [(key, mapping[key]) for key in preferred if key in mapping]
     ordered += [(key, value) for key, value in mapping.items() if key not in preferred]
     return ordered
+
+
+def _deep_merge(base, override):
+    """递归合并:嵌套字典逐层合并,其它值由 override 覆盖。
+
+    与 ``ArgumentManager._deep_merge`` 同一语义(命令行覆盖 YAML 时用的就是
+    它),保证「MCP 预览到的」与「真正解析出来的」一致。
+    """
+    result = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for key, value in (override or {}).items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _merge_nested_overrides(fields, inherited):
+    """把字典类覆盖项按「继承来的基值」铺开。
+
+    只展开字典:标量覆盖项不受影响,而嵌套字典如果直接写进 exp 节,会在
+    ConfigManager 的浅合并里整体替换网络节里的同名字典,丢掉没提到的兄弟键。
+    """
+    merged = dict(fields)
+    for key, value in fields.items():
+        if isinstance(value, dict) and isinstance(inherited.get(key), dict):
+            merged[key] = _deep_merge(inherited[key], value)
+    return merged
 
 
 def _find_anchors(text):
