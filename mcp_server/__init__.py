@@ -16,4 +16,6 @@
 模块(因此不依赖 torch),以便在没有 GPU 的机器上直接跑测试。
 """
 
+__version__ = "1.1.0"
+
 __all__ = ["paths", "config", "runs", "results", "server"]

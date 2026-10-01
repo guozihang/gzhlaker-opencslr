@@ -57,6 +57,20 @@ class ProbeTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("typo_key", response["error"])
 
+    def test_bad_typed_scalar_override_reports_error_instead_of_exiting(self):
+        """回归:argparse 的类型错误是 SystemExit(BaseException),会穿透 probe()。
+
+        穿透意味着子进程直接以退出码 2 死掉,调用方只拿到一段 usage 转储;
+        修好之后它和未知键一样,是一条带原因的 ok=False。
+        """
+        response = probe(
+            dict(self.request, exp="vac", overrides={"num_epoch": "not-an-int"})
+        )
+        self.assertFalse(response["ok"], response)
+        self.assertEqual(response["error_type"], "ValueError")
+        self.assertIn("num-epoch", response["error"])
+        self.assertIn("not-an-int", response["error"])
+
     def test_invalid_nested_values_are_caught_by_real_validator(self):
         cases = [
             {"model_args": {"typo": 1}},                 # 未知嵌套键

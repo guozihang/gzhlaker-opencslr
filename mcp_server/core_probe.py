@@ -14,6 +14,8 @@ PyYAML),因此即使在没有 GPU 的机器上也能正常解析。
     stdout -> {"ok": true, ...} 或 {"ok": false, "stage": "...", "error": "..."}
 """
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -40,6 +42,12 @@ def _jsonable(value):
     if isinstance(value, (list, tuple, set)):
         return [_jsonable(item) for item in value]
     return str(value)
+
+
+def _last_line(text):
+    """取多行文本的最后一行非空内容(argparse 的 usage 转储里,原因在最后一行)。"""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
 
 
 def _argparse_actions(parser):
@@ -135,7 +143,20 @@ def _resolve(request):
 
     from manager.config_manager import ConfigManager
 
-    ArgumentManager.parse()
+    # argparse 遇到类型/取值错误(如 num_epoch 传了字符串)会打印 usage 再抛
+    # SystemExit——它继承自 BaseException,probe() 的 `except Exception` 兜不
+    # 住,子进程会直接以退出码 2 死掉,调用方只能拿到一段 usage 转储。这里把
+    # stderr 接下来,转成普通异常,让错误以 ok=False 的结构化形式回去。
+    parser_stderr = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(parser_stderr):
+            ArgumentManager.parse()
+    except SystemExit as exc:
+        raise ValueError(
+            _last_line(parser_stderr.getvalue())
+            or f"命令行参数解析失败(argparse 退出码 {exc.code})"
+        ) from None
+
     ConfigManager.init()
     ArgumentManager.map(ConfigManager.get())
 

@@ -14,8 +14,16 @@
 """
 
 import functools
+import inspect
 import os
+import sys
 from typing import Any, Dict, List, Optional
+
+if __package__ in (None, ""):  # `python mcp_server/server.py`:补上包上下文
+    # 直接执行文件时没有父包,下面的相对导入会以 "attempted relative import
+    # with no known parent package" 失败(README 的快速开始给的就是这种用法)。
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "mcp_server"
 
 try:  # MCP SDK >= 2.0(FastMCP 更名为 MCPServer)
     from mcp.server.mcpserver import MCPServer as _MCPServer
@@ -24,6 +32,7 @@ except ImportError:  # MCP SDK 1.x
     from mcp.server.fastmcp import FastMCP as _MCPServer
     from mcp.server.fastmcp.exceptions import ToolError as _ToolError
 
+from . import __version__
 from .config import ExperimentConfig
 from .errors import McpToolError
 from .paths import RepoLayout
@@ -52,7 +61,20 @@ _STATE = {}
 # 需要真正训练环境的解释器(装了 torch);解析配置只需要 PyYAML
 _ENV_PYTHON = "OPENCSLR_PYTHON"
 
-mcp = _MCPServer("opencslr", instructions=INSTRUCTIONS)
+
+def _build_server():
+    """构造 MCP 服务;1.x 的 FastMCP 还没有 version 参数,传了会炸。"""
+    kwargs = {"instructions": INSTRUCTIONS}
+    try:
+        parameters = inspect.signature(_MCPServer.__init__).parameters
+    except (TypeError, ValueError):  # pragma: no cover - 拿不到签名时按不支持处理
+        parameters = {}
+    if "version" in parameters:
+        kwargs["version"] = __version__
+    return _MCPServer("opencslr", **kwargs)
+
+
+mcp = _build_server()
 
 
 def tool():
@@ -501,3 +523,14 @@ def _ensure_directory(path):
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise McpToolError(f"无法创建输出目录 {path}: {exc}")
+
+
+if __name__ == "__main__":  # `python mcp_server/server.py --root .` 也能启动
+    # 直接执行时本模块叫 __main__;先把它登记成 mcp_server.server,__main__.py
+    # 里的 `from .server import configure, mcp` 才会复用同一个服务实例,而不是
+    # 再导入一遍、把工具注册到第二个对象上。
+    sys.modules.setdefault("mcp_server.server", sys.modules[__name__])
+
+    from .__main__ import main
+
+    raise SystemExit(main())

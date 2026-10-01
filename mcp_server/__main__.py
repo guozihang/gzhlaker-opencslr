@@ -65,23 +65,27 @@ def main(argv=None):
 def listen_kwargs(args):
     """把 --host/--port 变成对应 SDK 版本的传参方式。
 
-    SDK 1.x 是 ``mcp.settings.host/port``,2.x 起改为 ``run(..., host=, port=)``。
+    SDK 1.x 把监听地址放在 ``mcp.settings.host/port``;2.x 起 ``settings`` 仍在
+    (只剩 log_level 等字段),host/port 改由 ``run(..., host=, port=)`` 传入。
+    所以不能用「有没有 settings」判版本——2.x 上那样会去写不存在的字段,
+    直接抛 ``ValueError: "Settings" object has no field "host"`` 起不来。
     """
     if not args.host and not args.port:
         return {}
-    settings = getattr(mcp, "settings", None)
-    if settings is None:
-        kwargs = {}
-        if args.host:
-            kwargs["host"] = args.host
-        if args.port:
-            kwargs["port"] = args.port
-        return kwargs
+    kwargs = {}
     if args.host:
-        settings.host = args.host
+        kwargs["host"] = args.host
     if args.port:
-        settings.port = args.port
-    return {}
+        kwargs["port"] = args.port
+    settings = getattr(mcp, "settings", None)
+    if settings is not None and hasattr(settings, "host"):
+        # SDK 1.x:写回 settings,run() 自己会读
+        if args.host:
+            settings.host = args.host
+        if args.port:
+            settings.port = args.port
+        return {}
+    return kwargs
 
 
 if __name__ == "__main__":
