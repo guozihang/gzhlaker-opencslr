@@ -185,8 +185,14 @@ python -m unittest discover -s mcp_server/tests -t .
 控制面本身的用例在 core 侧,同样不需要 torch:
 
 ```bash
-python3 core/tests/test_runtime_control.py
+python3 core/tests/test_runtime_control.py                    # 规则表:哪些能热改、怎么用
+python3 core/tests/test_training_control_integration.py       # 接线:真实 run_train/seq_train
 ```
+
+后者才是「训练循环真的会轮询」的证据:它把 torch / numpy 与几个 manager 边界换成桩,
+让仓库里**真实的** `ExperimentManager.run_train` 与 `pipeline.single.seq_train` 跑起来,
+断言中途改 `num_epoch` 会延长循环、`base_lr` 在同一个 epoch 内就生效、`log_interval`
+决定打印密度、ack 的 applied/ignored 正确,以及不传控制文件时行为与之前一致。
 
 ## 与旧 `agent/` 目录的关系
 
