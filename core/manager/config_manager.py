@@ -29,6 +29,9 @@ class ConfigManager:
             "num_classes", "hidden_size", "c2d_type", "conv_type",
             "kernel_size", "use_bn", "share_classifier", "weight_norm",
             "slowfast_config", "stride",
+            # SEN 的时序卷积结构选择(maxpool=上游结构 / liftpool=本地变体)与
+            # 输入尺寸覆盖,缺了会被当成拼写错误拒掉
+            "temporal_conv", "input_size",
         },
         "feeder_args": {
             "mode", "datatype", "num_gloss", "drop_ratio", "frame_interval",

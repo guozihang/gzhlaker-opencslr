@@ -75,6 +75,17 @@ Data flows as a dict through all containers — each container's forward pass up
 ### GPU Configuration
 `DeviceManager` handles multi-GPU setup. Multi-GPU DataParallel is applied to `spatial_module_container` only (see `ExperimentManager.model_to_device`).
 
+## Model structure vs upstream (immc-lab/OpenCSLR)
+
+Model **architecture semantics** are aligned with the upstream reference (https://github.com/immc-lab/OpenCSLR). Two structures had drifted and are now upstream-aligned, each with an opt-in switch for the local historical variant:
+
+- **SEN temporal conv**: upstream uses `SENTemporalConv` (`'P'` → `MaxPool1d(ceil_mode=False)`, kernels resolved from `conv_type`), reproduced at `core/modules/temporal/SENTemporalConv.py` and used **by default** in `build_sen`. The LiftPool variant (TLP's `TemporalConv`) is reachable via `model_args.temporal_conv: liftpool`. Upstream's `sen_Decoder` gate (`decode only when not self.training`) is reproduced as `SENDecoder` in `core/models/sen.py` — dropping that gate makes every training step run a pure-Python beam search.
+- **SlowFast FUSE**: the default `slowfast_config` (`SLOWFAST_64x2_R101_50_50.yaml`) is byte-identical to upstream (`FUSE: FuseFastToSlow`); `SLOWFAST_64x2_R101_50_50_FuseBiAdd.yaml` exists for weights trained while the local default was `FuseBiAdd` (`04ede88..9bd3e00`). Picking the wrong one changes the slow-path stage channel widths (80/320/640/1280 vs 64/256/512/1024) — `checkpoint_compat` refuses to load rather than silently mismatching.
+- **state_dict parity**: `TemporalSlowFastConv1D` keeps upstream's never-used outer `fc` and `temporal_model` registers `self.conv1d` exactly like upstream (an alias of the same parameters). Both exist so upstream's released checkpoints load with matching keys; they are inert in forward.
+- **Weight loading is tolerant but explicit**: `ExperimentManager.load_model_weights` loads with `strict=False`, then `core/utils/checkpoint_compat.py` (stdlib) partitions the diff — only provably inert keys pass (conv1d alias keys, the dead outer `fc`, missing `num_batches_tracked`); anything else raises with the offending key names plus a hint about the FUSE / `temporal_conv` switches. Never widen this to plain `strict=False`.
+- **TLP / VAC / CorrNet are layer-for-layer equivalent to upstream**; do not "fix" them. Intentional, result-neutral differences: upstream's dead data keys (`visual_features`, `output_first`, `conv_sents`) are not produced; the beam-search backend is the vendored pure-Python `core/libs/ctcdecode` (float64 intermediates, ~1e-6); `decode_mode` is honoured locally (upstream hardcodes `beam`; shipped configs are `beam`).
+- Tests: `python3 core/tests/test_upstream_structure_alignment.py` and `python3 core/tests/test_checkpoint_compat.py` (torch-free) pin all of the above. When comparing against upstream, normalize away docstrings, `require()` guards and `Keys.*` aliases before diffing — raw diffs across these trees are dominated by reformatting and will mislead (a hand-rolled diff once reported "all files identical" by comparing against non-existent paths).
+
 ## MCP Service (mcp_server/)
 
 `mcp_server/` exposes experiment management as MCP tools so an existing agent (Claude Code, etc.) can drive this repo without the repo embedding any agent/LLM runtime itself. No model APIs are called from this side — decisions belong to the client.

@@ -20,6 +20,11 @@ slowfast:
     share_classifier: 1
     weight_norm: True
     slowfast_config: SLOWFAST_64x2_R101_50_50.yaml
+    # 上面这份 = 上游 immc-lab/OpenCSLR 的默认结构(FUSE: FuseFastToSlow),也是
+    # 本仓库重构前训练权重对应的结构,所以两边权重都能直接加载。
+    # 若手上是 04ede88..9bd3e00 期间(默认 FuseBiAdd)训出来的 SlowFast 权重,
+    # 把这一行改成 SLOWFAST_64x2_R101_50_50_FuseBiAdd.yaml:两者只差 FUSE 一行,
+    # 但参数集合不同,选错会加载失败。
   loss_weights:
     <<: *common_ctc_loss
     Cu: 0.001

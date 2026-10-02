@@ -184,6 +184,40 @@ All models implemented with unified four-container architecture:
 | **Phoenix2014-T** | German (DGS) | 1,066 | 7,096 / 519 / 642 |
 | **CSL-Daily** | Chinese (CSL) | 2,000 | 18,401 / 1,077 / 1,176 |
 
+### 与上游 [immc-lab/OpenCSLR](https://github.com/immc-lab/OpenCSLR) 的结构一致性
+
+五个模型的**架构语义**已逐个核对并与上游对齐(逐层参数、模块顺序、forward 数据流、
+损失组成与权重、解码器行为)。核对方式:逐文件通读 + 去 docstring/别名的规范化 AST
+比对;结论由 `core/tests/test_upstream_structure_alignment.py` 与
+`core/tests/test_checkpoint_compat.py` 守住(不需要 torch 即可运行)。
+
+TLP / VAC / CorrNet 与上游**逐层等价**;两处曾经偏离、现已按上游对齐:
+
+| 位置 | 上游结构 | 本仓库历史 | 现状 |
+|---|---|---|---|
+| SEN 时序卷积 | `SENTemporalConv`:`P` → `MaxPool1d(ceil_mode=False)`,kernel 由 `conv_type` 推 | 曾复用 TLP 的 LiftPool 版 `TemporalConv` | 默认上游结构;`model_args.temporal_conv: liftpool` 可选回历史结构 |
+| SlowFast 融合 | `FUSE: FuseFastToSlow` | `04ede88..9bd3e00` 期间默认 `FuseBiAdd` | 默认上游结构;`slowfast_config` 指向 `SLOWFAST_64x2_R101_50_50_FuseBiAdd.yaml` 可加载历史权重 |
+
+**加载权重。** `--load-weights` / `--load-checkpoints` 不再「全有或全无」:先用
+`strict=False` 取回差异,只有**可证明不影响前向**的键才放行(SlowFast 的
+`temporal_model.conv1d` 别名键、`TemporalSlowFastConv1D` 外层从不使用的 `fc`、
+BatchNorm 的 `num_batches_tracked`),其余任何缺失/多余都会带着键名报错,并提示是
+FUSE 还是 SEN 的结构选错了。这样上游发布的预训练权重与本仓库重构前的权重都能直接
+加载,同时不会把真正的结构不匹配悄悄咽下去。
+
+有意保留的差异(都**不影响权重加载,也不影响计算结果**):
+
+- 上游写进 data dict 的三个死键 `visual_features` / `output_first` / `conv_sents`
+  本仓库不再产出(上游也只写不读;`output_first` 的消费方改读 `sequence_logits[0]`,
+  是同一张量)。
+- 束搜索后端用仓库内置的纯 Python 移植(`core/libs/ctcdecode`)替代编译版
+  `ctcdecode`:算法与超参一致,移植版自述中间概率为 float64(约 1e-6 量级差异)、
+  输出 padding 填 0、`num_processes` 退化为串行。
+- `decode_mode` 在本仓库真正生效(上游通用解码器写死 `beam`);仓库自带配置都是
+  `beam`,因此默认行为一致。
+- 上游 `ModuleManager` 的 SGD 分支把整个 module 传给 `optim.SGD`(会直接
+  `TypeError`)本仓库修成 `.parameters()`;`Container` 对非 dict 输出抛错而不是静默跳过。
+
 
 
 

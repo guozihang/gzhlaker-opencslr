@@ -14,6 +14,7 @@ from .device_manager import DeviceManager
 from pipeline.single import seq_train, seq_eval
 from models import Keys
 from utils.runtime_control import RuntimeControl
+from utils.checkpoint_compat import describe_diff, describe_ignorable, partition_key_diff
 from utils.seed_utils import set_seed, get_rng_state, set_rng_state
 
 class ExperimentManager:
@@ -308,9 +309,18 @@ class ExperimentManager:
 
         从指定路径加载模型权重，可选择忽略某些权重层。
 
+        加载不是「全有或全无」:先用 ``strict=False`` 取回差异,再由
+        ``utils.checkpoint_compat`` 判定。只有**可证明不影响前向**的键
+        (SlowFast 的别名键、从不使用的外层 fc、BatchNorm 计数器)才放行并记日志,
+        其余任何缺失/多余一律报错 —— 既能让上游发布的权重与本仓库旧权重都直接
+        加载,又不会把真正的结构不匹配悄悄咽下去。
+
         Args:
             model: 模型实例
             weight_path: 权重文件路径
+
+        Raises:
+            RuntimeError: 存在无法解释的 key 差异时抛出。
         """
         state_dict = torch.load(weight_path, map_location=DeviceManager.output_device)
         if 'model_state_dict' in state_dict:
@@ -323,7 +333,25 @@ class ExperimentManager:
                     LogManager.info('Can Not Remove Weights: {}.'.format(w))
         weights = cls.modified_weights(state_dict)
         model_to_load = model.module if hasattr(model, 'module') else model
-        model_to_load.load_state_dict(weights, strict=True)
+        missing, unexpected = model_to_load.load_state_dict(weights, strict=False)
+        report = partition_key_diff(missing, unexpected)
+        if report["fatal_missing"] or report["fatal_unexpected"]:
+            raise RuntimeError(
+                "权重与模型结构不匹配,拒绝加载: {}\n"
+                "排查提示:SlowFast 的融合方式要与权重一致——默认 SLOWFAST_64x2_R101_50_50.yaml"
+                "(FuseFastToSlow) 对应上游与本仓库重构前的权重,"
+                "04ede88..9bd3e00 期间(默认 FuseBiAdd)训的权重改用 "
+                "SLOWFAST_64x2_R101_50_50_FuseBiAdd.yaml;"
+                "SEN 的时序卷积用 model_args.temporal_conv 选择(maxpool=上游结构)。".format(
+                    describe_diff(report)
+                )
+            )
+        if report["ignorable_missing"] or report["ignorable_unexpected"]:
+            LogManager.info(
+                '权重与模型有可忽略差异({}),已按上游/本地兼容方式加载: {}'.format(
+                    describe_ignorable(report), describe_diff(report) or '无致命差异'
+                )
+            )
 
     @staticmethod
     def modified_weights(state_dict):

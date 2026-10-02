@@ -28,6 +28,10 @@ class TemporalSlowFastConv1D( nn.Module ) :
         self.conv1d = TemporalSlowFastFuse(
             fast_input_size=256, slow_input_size=2048, hidden_size=hidden_size,
             conv_type=args.get("conv_type", None), use_bn=args["use_bn"], num_classes=args["num_classes"] ,)
+        # 保留上游这一层 fc:forward 从不使用它(真正生效的是 TemporalSlowFastFuse.fc,
+        # 由 temporal_model 通过 conv1d.conv1d.fc 覆盖),但上游 checkpoint 里带着这 6 个
+        # 张量,删掉就没法与上游权重逐 key 对齐。这里按上游原样保留。
+        self.fc = nn.ModuleList([nn.Linear(hidden_size, args["num_classes"]) for i in range(3)])
 
     def forward(self, data):
 

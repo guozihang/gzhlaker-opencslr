@@ -29,6 +29,7 @@ from .temporal.BiLSTM import BiLSTM
 from .temporal.TemporalConv1D import TemporalConv1D
 from .temporal.CorrNet_TemporalConv1D import CorrNeT_TemporalConv1D
 from .temporal.tconv import VACTemporalConv
+from .temporal.SENTemporalConv import SENTemporalConv, sen_TemporalConv
 from .temporal.TemporalSlowFastConv1D import TemporalSlowFastConv1D
 from .temporal.temporal_model import temporal_model
 

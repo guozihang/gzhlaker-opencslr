@@ -29,24 +29,28 @@ class temporal_model(nn.Module):
         self.num_classes = args.get("num_classes", None)
         self.hidden_size = hidden_size
 
-        object.__setattr__(self, "_conv1d", conv1d)
+        # 与上游一致:把 conv1d 也注册成 temporal_model 的子模块。它其实是同一个
+        # 对象(同时挂在 temporal 容器里),这么做会让 state_dict 多出一组
+        # `temporal_module_container.1.conv1d.*` 别名键 —— 正是上游 checkpoint 的
+        # 形状,保留它才能 strict 加载上游发布的 SlowFast 权重。
+        self.conv1d = conv1d
         classifier_type = NormLinear if weight_norm else nn.Linear
         self.classifier = nn.ModuleList([
             classifier_type(self.hidden_size, self.num_classes) for _ in range(3)
         ])
-        if self._conv1d is not None:
-            self._conv1d.conv1d.fc = nn.ModuleList([
+        if self.conv1d is not None:
+            self.conv1d.conv1d.fc = nn.ModuleList([
                 classifier_type(self.hidden_size, self.num_classes) for _ in range(3)
             ])
 
         if share_classifier == 1:
-            if self._conv1d is not None:
-                self._conv1d.conv1d.fc = self.classifier
+            if self.conv1d is not None:
+                self.conv1d.conv1d.fc = self.classifier
         elif share_classifier == 2:
             classifier = self.classifier[0]
             self.classifier = nn.ModuleList([classifier for _ in range(3)])
-            if self._conv1d is not None:
-                self._conv1d.conv1d.fc = nn.ModuleList([classifier for _ in range(3)])
+            if self.conv1d is not None:
+                self.conv1d.conv1d.fc = nn.ModuleList([classifier for _ in range(3)])
 
     def forward(self, data):
         require(data, Keys.VISUAL_FEAT, Keys.FEAT_LEN, who="temporal_model")

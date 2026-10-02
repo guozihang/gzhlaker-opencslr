@@ -3,7 +3,10 @@ SLOWFAST:
   BETA_INV: 8
   FUSION_CONV_CHANNEL_RATIO: 2
   FUSION_KERNEL_SZ: 5
-  FUSE: FuseFastToSlow
+  # 本地历史结构:本仓库 04ede88..9bd3e00 期间默认用的融合方式。
+  # 用那个结构训出来的 SlowFast 权重,把 model_args.slowfast_config 指向本文件
+  # 才能加载(FuseBiAdd 与 FuseFastToSlow 的参数集合不同)。
+  FUSE: FuseBiAdd
 RESNET:
   ZERO_INIT_FINAL_BN: True
   WIDTH_PER_GROUP: 64
