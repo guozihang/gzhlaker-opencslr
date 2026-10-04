@@ -4,6 +4,10 @@
 # OPENCSLR_PYTHON 指向训练环境的解释器(默认就是本进程的解释器)。
 # 因此这套依赖可以装在任意一个干净的 python 里,与训练环境解耦。
 #
-# PyYAML 已在仓库根 requirements.txt 中,这里显式列出以免单独装时漏掉。
+# PyYAML 是探针(core_probe)导入上游 manager/argument_manager.py 与
+# manager/config_manager.py 时需要的。上游 config_manager 顶层还 import toml
+# 但从不使用,探针在缺它时会注入空桩,所以这里不必列。
+# 真正跑训练仍需上游完整依赖(torch / loguru / rich / wandb / toml 等),
+# 那属于 core/ 的事,不在本文件范围内。
 mcp>=2.0
 PyYAML

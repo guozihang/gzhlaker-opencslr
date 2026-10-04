@@ -1,101 +1,89 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for agents working in this repository.
 
-## Overview
+## 这个仓库是什么
 
-OpenSLR is a modular Continuous Sign Language Recognition (CSLR) toolbox built on PyTorch. It supports multiple model architectures (SlowFast, TLP, VAC, CorrNet, SEN) and datasets (Phoenix2014, Phoenix2014-T, CSL, CSL-Daily).
+**上游 [immc-lab/OpenCSLR](https://github.com/immc-lab/OpenCSLR) 的原样代码 + 一层 MCP 服务。**
 
-## Common Commands
+- `core/` 是上游的**逐字节拷贝**(验证:`diff -r -x __pycache__ <上游克隆>/core core` 应无输出);
+- `docs/`、`README.md`、`LICENSE` 同样取自上游;
+- 本仓库**只额外增加** `mcp_server/`(MCP 服务)与 `.mcp.json`(客户端注册)。
 
-### Training
+**铁律:`core/` 一行都不要改。** 需要改训练/模型/配置逻辑时,去上游改,再把上游新版
+拷回来。这样做是为了不再出现「本地结构与上游漂移」——历史上正是这种漂移导致了
+SEN 时序卷积、SlowFast FUSE、state_dict key 对不上等一连串问题。MCP 层要迁就上游,
+而不是反过来。
+
+## 分支
+
+| 分支 | 内容 |
+| --- | --- |
+| `feat/upstream-core-mcp` | 上游 core 原样 + MCP(当前开发分支) |
+| `legacy/refactored-mcp` | 旧的重构版 core(分节 exp.yaml/network.yaml + `modules/` 分层 + 注册表 + 运行时控制面)与当时的 MCP,仅作历史保留 |
+| `main` | 未改动;合并方向待确认 |
+
+## 上游的约定(与旧重构版差异很大,别按旧的写)
+
+- **一个实验 = `core/configs/` 下一个扁平 YAML**(`vac.yaml` / `tlp.yaml` / `baseline.yaml`),
+  顶层直接是参数;`model: models.build_function.build_vac` 是**模型点号路径**。
+  没有 `--exp`,没有 `network.yaml`。一个实验一个文件,没有分节、没有 YAML anchor。
+- `core/configs/` **同时**放着数据集配置(`phoenix2014.yaml` 等,含 `dataset_root`/`dict_path`)。
+  判别规则:有 `model:` 的是实验,有 `dataset_root`/`dict_path` 的是数据集。
+- 训练命令:`python main.py --config configs/<name>.yaml --phase train`;**cwd 必须是 `core/`**,
+  因为 `ArgumentManager.map()` 会去读 `./configs/<dataset>.yaml`(相对进程 cwd)。
+  `--model` 不必传,配置里写谁就用谁。
+- `ArgumentManager.map(config)` 用 `assert k in argparse_dests` 检查顶层键,然后
+  `set_defaults(**config)` + 重新 `parse()`。**它是整块替换字典**,所以任何「只改嵌套
+  字典里一个键」的用法都必须先深合并。
+- `ConfigManager` 只做 `yaml.load` + 字典合并,**没有任何校验**(没有嵌套键白名单、
+  没有类型规则、`base_lr` 为负也接受)。它顶层 `import toml` 但从未使用。
+- 上游目录名有拼写错误:`core/pipline/`(不是 `pipeline`),照抄不要「修」。
+- 训练产物:日志 `<work_dir>/log_<时间戳>.log`(loguru);checkpoint
+  `<work_dir>_best_model.pt` 与 `<work_dir>dev_<wer>_epoch<n>_model.pt`(`work_dir` 同时
+  被当目录和文件名前缀)。**上游不写任何结果 JSON**。
+- 没有 `--control-file`,没有运行时控制面:训练中途改不了超参数。
+
+## MCP 服务(`mcp_server/`)
+
+设计原则:**MCP 是上游代码之上的适配层**,不复制上游的规则,也不要求上游为它改动。
+
+- `server.py` 是**唯一**导入 `mcp` 的模块;其余(config / runs / results / paths / core_probe)
+  都是纯 Python,没有 torch 也能测。
+- `core_probe.py` 在子进程里跑**上游真实的** `ArgumentManager.init → ConfigManager.init →
+  map()`,回传生效配置与参数 schema。绝不在这里复刻优先级或校验规则——上游改了,
+  这里跟着变。探针只导入 `manager/argument_manager.py` 与 `manager/config_manager.py`
+  (不需要 torch),并在缺 `toml` 时注入空桩(上游 import 了它却不用)。
+- 工具通过 `server.tool()` 注册(不是 `mcp.tool()`):它把 `McpToolError` 翻译成 SDK 的
+  `ToolError`,这是 SDK 唯一会原样透出 message 的异常类型;其它异常会被压成一句
+  `Error executing tool <name>`,「实验不存在 / model 路径无效」这类可行动信息就丢了。
+- `launch_experiment(overrides=...)` 把「实验配置 + 覆盖」落成
+  `core/configs/_mcp_run_<run_id>.yaml` 再启动,**不改动实验自己的配置文件**;字典类
+  覆盖按 YAML 语义深合并(见上:上游 `map` 是整块替换)。临时配置进程结束即清理,
+  快照留在 `<runs_dir>/<run_id>.config.yaml`。
+- 进程脱离会话启动(`start_new_session=True`),记录与日志在 `<repo>/.mcp_runs/`;
+  `stop_run` 先核对 pid 的命令行再发信号,绝不误杀无关进程。
+- **能力边界要如实**:上游没有的能力就不要造工具。历史版本里的
+  `set_hyperparameters` / `get_control_state`(依赖给上游打 `--control-file` 补丁)在
+  本分支已删除;`get_hyperparameters` 的 `hot` 与嵌套 `allowed` 如实为 `null`;
+  上游不落盘结果 JSON,`get_results` 就从 `log_*.log` 解析 WER 并用 `source` 标明来源。
+- 共 16 个工具(清单见 `mcp_server/README.md`)。
+
+## 常用命令
+
 ```bash
-cd core
-python main.py --config configs/exp.yaml --exp baseline --work-dir ./work_dir/my_experiment
-```
-`--exp` selects a section of `configs/exp.yaml`; that section's `network:` key selects a section of `configs/network.yaml`, and `dataset:` selects a section of `configs/dataset.yaml`. These three files are the only config entry points — always start from `configs/exp.yaml` with `--exp <name>`.
+# MCP 服务
+python3 -m mcp_server --root "$PWD"                      # stdio
+python3 -m unittest discover -s mcp_server/tests -t .     # 全量测试(无需 torch/GPU)
 
-### Testing / Evaluation
-```bash
-python main.py --config configs/exp.yaml --exp baseline --phase test \
-  --load-weights ./work_dir/my_experiment_best_model.pt
-```
-Note the checkpoint path: `work_dir` is used as a *filename prefix* for checkpoints (`{work_dir}_best_model.pt`), but as a *directory* for logs and `experiment_result.json`.
-
-### Data Preprocessing
-```bash
-cd core/preprocess
-python dataset_preprocess.py --dataset phoenix2014 --dataset-root /path/to/dataset --process-image
+# 训练(上游原样)
+cd core && python main.py --config configs/vac.yaml --phase train
 ```
 
-### Adding a New Model
-One model = one file. The framework (`Keys`, `Container`, `SignLanguageModel`, the registry) lives in `core/models/__init__.py`; shared building blocks live in `core/modules/`, split by role into `spatio/`, `temporal/`, `losses/`, `decoders/`, with auxiliary blocks (`Identity`, `Classifier`, `NormLinear`) in `others/`. Each category folder holds **only** what belongs to that category — anything that isn't a spatial net / temporal net / loss / decoder goes in `others/`. `core/modules/__init__.py` re-exports all of them, so import from `modules` directly — not from the subfolders.
+## MCP 相关环境变量
 
-Add `core/models/your_model.py` with a `build_*` function that instantiates a `SignLanguageModel` from four containers and is registered via `@register_model("your_model")`, then append it to the `from . import ...` list at the bottom of `core/models/__init__.py` (importing populates the registry). Reference that name from a network section:
-```yaml
-# core/configs/network.yaml
-your_model:
-  model: your_model          # 与 @register_model("your_model") 的注册名一致
-  model_args: {...}
-```
-Then in `core/configs/exp.yaml` add an experiment with `network: your_model`. `ModuleManager.load()` resolves only registered names — there is no dotted-path fallback.
-
-## Architecture
-
-### Initialization Chain (core/main.py)
-The system initializes via a strict chain of static managers (all in `core/manager/`):
-1. `ArgumentManager` — parses CLI args
-2. `ConfigManager` — loads the experiment YAML (exp section + referenced network section) and validates it (unknown keys, types, invalid values); raises on error
-3. `ArgumentManager.map()` — applies config values to CLI parser defaults (CLI > YAML > code defaults)
-4. `DeviceManager` → `LogManager` → `DatasetManager` → `CollectManager` → `ModuleManager` → `DataloaderManager` → `ExperimentManager`
-
-Training/eval loops live in `core/pipeline/single.py` (`seq_train` / `seq_eval`).
-
-### Model Architecture (core/models/__init__.py)
-All models are built as a `SignLanguageModel`, which is composed of four `Container` sub-modules executed in order:
-1. `spatial_module_container` — processes individual frames (e.g., ResNet, SlowFast backbone)
-2. `temporal_module_container` — models temporal dependencies (e.g., TemporalConv1D, BiLSTM)
-3. `loss_module_container` — computes losses (CTC-based)
-4. `decoder` — converts model output to readable text (greedy max or beam search)
-
-Data flows as a dict through all containers — each container's forward pass updates the dict in-place with new keys.
-
-### Training Loop (core/pipeline/single.py)
-`seq_train()` and `seq_eval()` contain the per-epoch logic. `ExperimentManager.run_train()` orchestrates epochs, calling `seq_train` + `seq_eval`, tracking best WER, and saving checkpoints.
-
-### Configuration System
-- Experiment configs live in `core/configs/` (e.g., `baseline.yaml`)
-- Dataset-specific configs (paths, gloss dict location) also in `core/configs/` (e.g., `phoenix2014.yaml`)
-- `ArgumentManager` sets dataset config at runtime based on `--dataset` arg
-- `DatasetManager` loads the gloss dictionary and creates dataset instances for `train`, `dev`, `test` splits
-
-### Data Loading
-`VideoDataset` in `core/dataset/dataloader_video.py` supports multiple data types: `video` (raw jpg), `lmdb`, `memmap`, or pre-extracted features. Data type is set via `feeder_args.datatype` in the config.
-
-### GPU Configuration
-`DeviceManager` handles multi-GPU setup. Multi-GPU DataParallel is applied to `spatial_module_container` only (see `ExperimentManager.model_to_device`).
-
-## Model structure vs upstream (immc-lab/OpenCSLR)
-
-Model **architecture semantics** are aligned with the upstream reference (https://github.com/immc-lab/OpenCSLR). Two structures had drifted and are now upstream-aligned, each with an opt-in switch for the local historical variant:
-
-- **SEN temporal conv**: upstream uses `SENTemporalConv` (`'P'` → `MaxPool1d(ceil_mode=False)`, kernels resolved from `conv_type`), reproduced at `core/modules/temporal/SENTemporalConv.py` and used **by default** in `build_sen`. The LiftPool variant (TLP's `TemporalConv`) is reachable via `model_args.temporal_conv: liftpool`. Upstream's `sen_Decoder` gate (`decode only when not self.training`) is reproduced as `SENDecoder` in `core/models/sen.py` — dropping that gate makes every training step run a pure-Python beam search.
-- **SlowFast FUSE**: the default `slowfast_config` (`SLOWFAST_64x2_R101_50_50.yaml`) is byte-identical to upstream (`FUSE: FuseFastToSlow`); `SLOWFAST_64x2_R101_50_50_FuseBiAdd.yaml` exists for weights trained while the local default was `FuseBiAdd` (`04ede88..9bd3e00`). Picking the wrong one changes the slow-path stage channel widths (80/320/640/1280 vs 64/256/512/1024) — `checkpoint_compat` refuses to load rather than silently mismatching.
-- **state_dict parity**: `TemporalSlowFastConv1D` keeps upstream's never-used outer `fc` and `temporal_model` registers `self.conv1d` exactly like upstream (an alias of the same parameters). Both exist so upstream's released checkpoints load with matching keys; they are inert in forward.
-- **Weight loading is tolerant but explicit**: `ExperimentManager.load_model_weights` loads with `strict=False`, then `core/utils/checkpoint_compat.py` (stdlib) partitions the diff — only provably inert keys pass (conv1d alias keys, the dead outer `fc`, missing `num_batches_tracked`); anything else raises with the offending key names plus a hint about the FUSE / `temporal_conv` switches. Never widen this to plain `strict=False`.
-- **TLP / VAC / CorrNet are layer-for-layer equivalent to upstream**; do not "fix" them. Intentional, result-neutral differences: upstream's dead data keys (`visual_features`, `output_first`, `conv_sents`) are not produced; the beam-search backend is the vendored pure-Python `core/libs/ctcdecode` (float64 intermediates, ~1e-6); `decode_mode` is honoured locally (upstream hardcodes `beam`; shipped configs are `beam`).
-- Tests: `python3 core/tests/test_upstream_structure_alignment.py` and `python3 core/tests/test_checkpoint_compat.py` (torch-free) pin all of the above. When comparing against upstream, normalize away docstrings, `require()` guards and `Keys.*` aliases before diffing — raw diffs across these trees are dominated by reformatting and will mislead (a hand-rolled diff once reported "all files identical" by comparing against non-existent paths).
-
-## MCP Service (mcp_server/)
-
-`mcp_server/` exposes experiment management as MCP tools so an existing agent (Claude Code, etc.) can drive this repo without the repo embedding any agent/LLM runtime itself. No model APIs are called from this side — decisions belong to the client.
-
-- `server.py` is the **only** module that imports `mcp`; everything else (config, runs, results) is plain Python and testable without the SDK or torch.
-- `core_probe.py` runs the **real** `ArgumentManager` + `ConfigManager` in a subprocess and returns the resolved config as JSON. Never re-implement config rules (key whitelist, merge order, validation) in the MCP layer — delegate, so tool verdicts match what training actually does.
-- Tools are registered through `server.tool()`, not `mcp.tool()` — it translates `McpToolError` into the SDK's `ToolError`, the only exception type whose message the SDK forwards to the caller. Raising anything else reduces a useful reason ("experiment not found") to a bare `Error executing tool <name>`.
-- Runs are launched detached (`start_new_session=True`) with records plus logs under `<repo>/.mcp_runs/`; `stop_run` verifies the pid's command line before signalling so it can never kill an unrelated process.
-- **Hyperparameters are editable from the MCP side, at launch and mid-run.** `launch_experiment(overrides=...)` writes a throwaway single-section config to `core/configs/_mcp_run_<run_id>.yaml` (it must live next to `exp.yaml`, because `ConfigManager` resolves `network.yaml`/`dataset.yaml` from the config's directory) and never touches `exp.yaml`; nested overrides are **deep-merged**, since an explicit nested dict in an exp section replaces the network section's dict wholesale (shallow `dict.update`). The temp config is deleted when the run ends and a copy is kept at `<runs_dir>/<run_id>.config.yaml`.
-- Mid-run changes use a control file: every launch passes `--control-file <runs_dir>/<run_id>.control.json`; `set_hyperparameters` bumps `revision`, the training loop polls it and writes `<control-file>.ack.json` with `applied`/`ignored` (only the main process writes the ack). The rule table for what is hot-changeable lives in `core/utils/runtime_control.py` (stdlib-only) — do not duplicate it in the MCP layer; `core_probe.py` reads it for `get_hyperparameters`. Keys that cannot be hot-changed must be reported with a reason, never silently dropped.
-- Tests: `python -m unittest discover -s mcp_server/tests -t .` plus `python3 core/tests/test_runtime_control.py` and `python3 core/tests/test_training_control_integration.py` (all three run without torch/GPU — the last one stubs torch/numpy and executes the real `run_train`/`seq_train`, so the training-loop wiring is actually verified, not just reviewed).
-
-
+| 变量 | 作用 |
+| --- | --- |
+| `OPENCSLR_ROOT` | 仓库根目录(默认向上查找 `core/main.py`) |
+| `OPENCSLR_MCP_RUNS_DIR` | 运行记录目录(默认 `<repo>/.mcp_runs`) |
+| `OPENCSLR_PYTHON` | 执行 `core/main.py` 的解释器;服务本身不需要 torch,起训练时才用它 |

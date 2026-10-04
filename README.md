@@ -324,3 +324,23 @@ If you use this framework in your research, please cite:
 ## Contact
 
 For questions or support, please open an issue on GitHub or contact the project maintainers.
+
+---
+
+## MCP Service (added on top of this codebase)
+
+本仓库在上游代码之上**额外增加**了一层 [MCP](https://modelcontextprotocol.io) 服务
+(`mcp_server/`),让已有的智能体(Claude Code、IDE 助手等)通过工具管理实验:
+查看实验清单、预览实际生效的配置、改超参数、起训练、追进度、读 WER 与 checkpoint。
+
+`core/` 是上游的**逐字节拷贝,没有任何补丁**;所有适配都在 MCP 层:
+
+```bash
+pip install -r mcp_server/requirements.txt
+claude mcp add opencslr -- python3 -m mcp_server --root "$PWD"
+```
+
+能力边界如实反映上游现状:**没有**训练中途热改(上游没有运行时控制面);
+`get_results` 从 `log_*.log` 解析 WER(上游不落盘结果 JSON);
+嵌套键取值域未知(上游 `ConfigManager` 不做校验)。
+工具清单、配置模型对应关系与设计说明见 [`mcp_server/README.md`](mcp_server/README.md)。
