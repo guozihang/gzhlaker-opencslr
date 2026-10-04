@@ -4,13 +4,16 @@
 这是唯一依赖 `mcp` 包的模块;配置解析、运行管理、结果读取都在同包的其它
 模块里实现,因此那些逻辑可以在不安装 MCP SDK 的情况下直接测试。
 
-工具分三组:
-    看清现状  list_experiments / get_experiment_config / list_options /
-              resolve_experiment
+共 16 个工具,分三组:
+    看清现状  get_server_info / list_experiments / get_experiment_config /
+              list_options / resolve_experiment / get_hyperparameters
     跑实验    create_experiment / launch_experiment / launch_preprocess /
               stop_run
     看结果    list_runs / get_run_status / get_results / list_artifacts /
               tail_log / list_work_dirs
+
+注意:上游 core 没有运行时控制面,所以没有「训练中途热改」相关工具
+(历史版本里的 set_hyperparameters / get_control_state 已随 core 更换而移除)。
 """
 
 import functools
@@ -166,20 +169,23 @@ def list_experiments() -> Dict[str, Any]:
 
 @tool()
 def get_experiment_config(name: str) -> Dict[str, Any]:
-    """查看某个实验「声明了什么」:exp 节及其引用的网络节、数据集节。
+    """查看某个实验「声明了什么」:配置文件 configs/<name>.yaml 的原文。
 
-    这是配置文件里的原始内容(网络节打底、exp 节覆盖)。如果要看合并参数
-    默认值之后「实际生效」的完整配置,请用 resolve_experiment。
+    这是配置文件里写的原始内容。如果要看合并参数默认值之后「实际生效」的
+    完整配置,请用 resolve_experiment。
 
     Args:
-        name: 实验名,即 `--exp` 的取值(见 list_experiments)。
+        name: 实验名,即 configs/ 下的文件名(不含 .yaml,见 list_experiments)。
     """
     return _component("config").get_experiment_config(name)
 
 
 @tool()
 def list_options() -> Dict[str, Any]:
-    """列出可选的实验名、网络名、数据集名,以及每个网络用到的模型名。
+    """列出可选的实验名、模型点号路径、数据集名。
+
+    模型点号路径取自各实验配置里的 `model:`,新建实验(create_experiment)
+    时的 model / dataset 取值必须来自这里。
 
     新建实验(create_experiment)时的 model / dataset 取值必须来自这里。
     """
@@ -230,7 +236,7 @@ def resolve_experiment(name: str, overrides: Optional[Dict[str, Any]] = None) ->
 
 # ====================================================================== 调参
 
-# 每类键在「能不能热改」上的说明模板(具体理由来自 core 的规则表)
+# 每类键在「能不能热改」上的说明模板(上游没有运行时控制面,hot 恒为 None)
 _CHANGE_HINT_STARTUP = "启动前改:launch_experiment(overrides=...) 或 create_experiment"
 _CHANGE_HINT_HOT = "可在训练中途修改(需要 core 提供运行时控制面)"
 
@@ -240,7 +246,8 @@ def get_hyperparameters(name: str) -> Dict[str, Any]:
     """列出这个实验的全部超参数:当前生效值、类型/取值域、以及能否中途热改。
 
     调参前先看这个,别靠猜键名:清单与取值域来自真实的 main.py 参数表与
-    ConfigManager 规则表;当前值来自真实的初始化链。
+    上游 main.py 的参数表;当前值来自真实的初始化链。上游 ConfigManager 不做
+    嵌套键/取值校验,所以嵌套节的 allowed 一律为 null(如实标为未知,不假装有)。
 
     返回里每条参数带:
     - current: 当前生效值
@@ -533,15 +540,17 @@ def launch_preprocess(
     生成的 memmap/特征供 feeder_args.datatype 使用;跑之前确认磁盘空间。
 
     Args:
-        dataset: 数据集名(见 list_options 或 dataset.yaml)。
-        dataset_root: 原始数据目录;不传则用 dataset.yaml 里的默认值。
+        dataset: 数据集名(见 list_options;对应 configs/<dataset>.yaml)。
+        dataset_root: 原始数据目录;不传则用数据集配置里的默认值。
         process_image: 是否同时处理原始图像(耗时很长)。
         extra_args: 透传给 dataset_preprocess.py 的其它参数(逐个 token)。
         dry_run: 为 True 时只返回命令不启动。
     """
     datasets = _component("config").list_options()["datasets"]
     if dataset not in datasets:
-        raise McpToolError(f"dataset {dataset!r} 不在 dataset.yaml 中;可用: {datasets}")
+        raise McpToolError(
+            f"数据集 {dataset!r} 没有对应的 configs/{dataset}.yaml;可用: {datasets}"
+        )
 
     launcher = _component("launcher")
     command = launcher.build_preprocess_command(dataset, dataset_root, process_image, extra_args)

@@ -15,7 +15,7 @@ ENV_RUNS_DIR = "OPENCSLR_MCP_RUNS_DIR"
 # 覆盖执行 core/main.py 用的解释器(默认本进程的解释器)
 ENV_PYTHON = "OPENCSLR_PYTHON"
 
-# 仓库根目录标志:core/main.py 存在(core/configs/ 另行检查)
+# 仓库根目录标志:向上查找 core/main.py(core/configs/ 在 require_entries 里另行检查)
 _ROOT_MARKER = ("core", "main.py")
 
 
