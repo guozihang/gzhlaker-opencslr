@@ -1,9 +1,17 @@
 # -*- encoding: utf-8 -*-
-"""测试用的临时仓库与假训练脚本。"""
+"""测试用的临时仓库、假实验脚本与探针调用。
 
+临时仓库刻意**照抄上游布局**:一个实验 = ``core/configs/<name>.yaml``,配置里
+``model: models.build_function.build_vac`` 是点号路径;``core/configs/`` 里同时
+放着数据集配置。``core/manager/`` 是真实的参数/配置管理器,所以临时仓库里的
+探针跑的就是上游真正的解析逻辑,而不是一份测试专用的假规则。
+"""
+
+import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -11,7 +19,15 @@ from pathlib import Path
 from mcp_server.paths import RepoLayout
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REAL_CONFIGS = REPO_ROOT / "core" / "configs"
+REAL_CORE = REPO_ROOT / "core"
+REAL_CONFIGS = REAL_CORE / "configs"
+CORE_PROBE = REPO_ROOT / "mcp_server" / "core_probe.py"
+
+# 上游的实验配置(带 model:)与数据集配置(带 dataset_root/dict_path)
+_EXPERIMENT_CONFIGS = ("baseline.yaml", "tlp.yaml", "vac.yaml")
+_DATASET_CONFIGS = ("phoenix2014.yaml", "CSL-Daily.yaml")
+# 探针只用到 load/get,但 config_manager 顶层 import 了 argument_manager
+_MANAGER_MODULES = ("argument_manager.py", "config_manager.py")
 
 # 假 main.py:按 --fail 参数决定退出码,其余情况睡眠,方便测试运行状态机
 FAKE_MAIN = """# -*- encoding: utf-8 -*-
@@ -36,84 +52,74 @@ import sys
 print("[fake-preprocess] argv:", " ".join(sys.argv[1:]), flush=True)
 """
 
-# 会真的轮询控制文件的假训练脚本。它用的就是仓库里真实的
-# core/utils/runtime_control.py,因此能端到端验证整条介入链路:
-# MCP 写控制文件 -> 训练进程应用 -> 写回 ack -> MCP 读回。
-CONTROL_FAKE_MAIN = '''# -*- encoding: utf-8 -*-
-import sys, time, types
-from utils.runtime_control import RuntimeControl
-
-argv = sys.argv
-control_path = argv[argv.index("--control-file") + 1] if "--control-file" in argv else None
-iterations = int(argv[argv.index("--iterations") + 1]) if "--iterations" in argv else 200
-
-
-class FakeOptimizer:
-    def __init__(self, lr):
-        self.param_groups = [{"lr": lr, "weight_decay": 0.0}]
-
-
-class FakeScheduler:
-    def __init__(self, lr):
-        self.base_lrs = [lr]
-        self.milestones = {}
-
-
-class FakeModel:
-    def __init__(self, loss_weights):
-        self.loss_weights = loss_weights
-
-    def modules(self):
-        return [self]
-
-
-loss_weights = {"SeqCTC": 1.0}
-arg = types.SimpleNamespace(
-    optimizer_args={"base_lr": 0.001, "weight_decay": 0.0, "step": [5, 10]},
-    num_epoch=10, save_interval=1, eval_interval=1, log_interval=200,
-    print_log=True, loss_weights=loss_weights,
-    feeder_args={"max_eval_frames": 100},
-)
-optimizer = FakeOptimizer(0.001)
-scheduler = FakeScheduler(0.001)
-model = FakeModel(loss_weights)
-
-control = RuntimeControl(control_path, log=lambda message: print("[control]", message, flush=True))
-control.bind(arg=arg, optimizer=optimizer, scheduler=scheduler, model=model)
-print("[trainer] start", flush=True)
-for step in range(iterations):
-    control.poll(epoch=0, batch=step)
-    print("[trainer] step=%d lr=%.6f" % (step, optimizer.param_groups[0]["lr"]), flush=True)
-    time.sleep(0.1)
-print("[trainer] done", flush=True)
-'''
-
 
 def make_temp_repo(with_configs=True):
-    """建一个临时仓库,返回 RepoLayout。
+    """建一个镜像上游布局的临时仓库,返回 RepoLayout。
 
-    会拷一份真实的 core/manager 与 core/utils(都只含不导入 torch 的代码),
-    这样临时仓库也能跑真实的配置解析与校验、并读到真实的热改规则表,而不是让
-    用例依赖一份假规则。
+    复制的内容:
+      - ``core/main.py``        helpers.FAKE_MAIN(只打印 argv,支持 --fail/--sleep)
+      - ``core/configs/``       真实的 vac/tlp/baseline + phoenix2014/CSL-Daily
+      - ``core/manager/``       真实的 argument_manager.py + config_manager.py
+      - ``core/models/build_function.py``
+        真实文件,但只被 config.py 静态 ast 解析(校验 model 点号路径),从不导入,
+        所以临时仓库里跑测试同样不需要 torch
+      - ``core/preprocess/dataset_preprocess.py``  helpers.FAKE_PREPROCESS
+
+    Args:
+        with_configs: 为 False 时不拷贝任何配置(用于「configs/ 里什么都没有」的
+            边界用例)。
     """
     root = Path(tempfile.mkdtemp(prefix="mcp_test_repo_"))
     core = root / "core"
     configs = core / "configs"
     configs.mkdir(parents=True)
     if with_configs:
-        for name in ("exp.yaml", "network.yaml", "dataset.yaml"):
+        for name in _EXPERIMENT_CONFIGS + _DATASET_CONFIGS:
             shutil.copy(REAL_CONFIGS / name, configs / name)
-    shutil.copytree(REAL_CONFIGS.parent / "manager", core / "manager",
-                    ignore=shutil.ignore_patterns("__pycache__"))
-    # core/utils 没有 __init__.py(隐式命名空间包),但 runtime_control 就在里面:
-    # core_probe 要从这里读「哪些超参数能热改」
-    shutil.copytree(REAL_CONFIGS.parent / "utils", core / "utils",
-                    ignore=shutil.ignore_patterns("__pycache__"))
+
+    manager = core / "manager"
+    manager.mkdir()
+    for name in _MANAGER_MODULES:
+        shutil.copy(REAL_CORE / "manager" / name, manager / name)
+
+    models = core / "models"
+    models.mkdir()
+    shutil.copy(REAL_CORE / "models" / "build_function.py", models / "build_function.py")
+
     (core / "main.py").write_text(FAKE_MAIN, encoding="utf-8")
     preprocess = core / "preprocess"
     preprocess.mkdir()
     (preprocess / "dataset_preprocess.py").write_text(FAKE_PREPROCESS, encoding="utf-8")
     return RepoLayout(root)
+
+
+def run_probe(request, cwd=None, timeout=180):
+    """按线上协议跑一次 ``core_probe.py`` 子进程,返回解析后的响应。
+
+    与 ``config.py`` 调用探针的方式一致(请求走 stdin、响应是 stdout 最后一行
+    JSON),所以这里验证的是真正被生产代码用到的协议,而不是直接 import 函数
+    绕开进程边界。
+    """
+    proc = subprocess.run(
+        [python_executable(), str(CORE_PROBE)],
+        input=json.dumps(request, ensure_ascii=False),
+        capture_output=True,
+        text=True,
+        cwd=str(cwd or REAL_CORE),
+        timeout=timeout,
+    )
+    for line in reversed((proc.stdout or "").splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+    raise AssertionError(
+        "探针没有返回 JSON(退出码 {}):stdout={!r} stderr={!r}".format(
+            proc.returncode, proc.stdout, proc.stderr
+        )
+    )
 
 
 def remove_tree(path):
@@ -144,8 +150,6 @@ def python_executable():
 
 
 def write_json(path, payload):
-    import json
-
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

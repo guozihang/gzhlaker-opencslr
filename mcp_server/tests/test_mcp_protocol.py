@@ -9,6 +9,7 @@ import asyncio
 import json
 import sys
 import unittest
+from pathlib import Path
 
 from .helpers import REPO_ROOT
 
@@ -20,6 +21,7 @@ try:
 except ImportError:  # 没装 MCP SDK 时跳过
     HAVE_MCP = False
 
+# 上游 core 没有运行时控制面,所以只有这 16 个工具
 EXPECTED_TOOLS = {
     "get_server_info",
     "list_experiments",
@@ -31,8 +33,6 @@ EXPECTED_TOOLS = {
     "launch_experiment",
     "launch_preprocess",
     "stop_run",
-    "set_hyperparameters",
-    "get_control_state",
     "list_runs",
     "get_run_status",
     "get_results",
@@ -40,6 +40,9 @@ EXPECTED_TOOLS = {
     "tail_log",
     "list_work_dirs",
 }
+
+# 已删除的工具:再出现就说明能力边界被夸大了
+REMOVED_TOOLS = {"set_hyperparameters", "get_control_state"}
 
 READ_ONLY_CALLS = [
     ("get_server_info", {}),
@@ -52,8 +55,10 @@ READ_ONLY_CALLS = [
     ("list_runs", {}),
     ("list_work_dirs", {}),
     ("get_results", {"work_dir": "./work_dir/never_ran/"}),
+    ("list_artifacts", {"work_dir": "./work_dir/never_ran/"}),
     ("launch_experiment", {"name": "vac", "dry_run": True}),
     ("launch_experiment", {"name": "vac", "overrides": {"num_epoch": 3}, "dry_run": True}),
+    ("launch_preprocess", {"dataset": "phoenix2014", "dry_run": True}),
 ]
 
 # name, arguments, 期望错误信息里出现的关键词
@@ -61,9 +66,13 @@ ERROR_CALLS = [
     ("get_experiment_config", {"name": "does_not_exist"}, "不存在"),
     ("get_hyperparameters", {"name": "does_not_exist"}, "不存在"),
     ("tail_log", {"run_id": "20260101-000000-nonexistent"}, "找不到运行记录"),
-    ("get_control_state", {"run_id": "20260101-000000-nonexistent"}, "找不到运行记录"),
-    ("set_hyperparameters", {"run_id": "20260101-000000-nonexistent", "overrides": {"num_epoch": 3}}, "找不到运行记录"),
-    ("create_experiment", {"name": "x", "network": "no_such_net", "dataset": "phoenix2014"}, "network"),
+    ("tail_log", {}, "需要提供"),
+    ("create_experiment",
+     {"name": "x", "model": "models.build_function.build_nope", "dataset": "phoenix2014"},
+     "build_nope"),
+    ("create_experiment",
+     {"name": "x", "model": "models.build_function.build_vac", "dataset": "no_such_dataset"},
+     "no_such_dataset"),
     ("launch_experiment", {"name": "no_such_exp"}, "不存在"),
 ]
 
@@ -74,34 +83,53 @@ class ProtocolTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.timeout = 120
+        cls.timeout = 180
         cls.session_result = asyncio.run(asyncio.wait_for(_exercise_server(), timeout=cls.timeout))
 
     def test_expected_tools_are_registered(self):
         schemas, _ = self.session_result
-        missing = EXPECTED_TOOLS - set(schemas)
-        self.assertEqual(missing, set(), f"缺少工具: {sorted(missing)}")
+        self.assertEqual(set(schemas), EXPECTED_TOOLS,
+                         f"工具清单不一致:多 {sorted(set(schemas) - EXPECTED_TOOLS)} / "
+                         f"少 {sorted(EXPECTED_TOOLS - set(schemas))}")
+        self.assertEqual(set(schemas) & REMOVED_TOOLS, set(),
+                         "上游没有运行时控制面,这两个工具不该再注册")
 
     def test_read_only_tools_return_json(self):
         _, results = self.session_result
+        checked = 0
         for name, payload in results.items():
             if name.startswith("error: "):
                 continue  # 错误路径另有用例
+            checked += 1
             with self.subTest(tool=name):
                 self.assertFalse(payload["is_error"], payload["text"][:300])
                 self.assertIsInstance(json.loads(payload["text"]), dict)
+        self.assertEqual(checked, len(READ_ONLY_CALLS))
 
     def test_resolve_reports_real_values(self):
         _, results = self.session_result
         resolved = json.loads(results["resolve_experiment"]["text"])
         self.assertTrue(resolved["ok"], resolved)
-        self.assertEqual(resolved["key_settings"]["model"], "vac")
+        self.assertEqual(resolved["key_settings"]["model"], "models.build_function.build_vac")
+        self.assertEqual(resolved["key_settings"]["dataset"], "phoenix2014")
         self.assertEqual(resolved["effective"]["num_epoch"], 80)
+        self.assertEqual(resolved["effective"]["decode_mode"], "beam")
 
     def test_override_is_visible_in_resolution(self):
         _, results = self.session_result
         resolved = json.loads(results["resolve_experiment (overridden)"]["text"])
         self.assertEqual(resolved["effective"]["num_epoch"], 3)
+
+    def test_launch_dry_run_reports_the_temp_config_it_would_write(self):
+        _, results = self.session_result
+        dry = json.loads(results["launch_experiment (overridden)"]["text"])
+        self.assertTrue(dry["dry_run"])
+        self.assertIn("--config", dry["command"])
+        self.assertTrue(dry["config_path"].endswith(".yaml"))
+        self.assertTrue(str(dry["would_write_config"]).startswith(
+            str(REPO_ROOT / "core" / "configs")))
+        self.assertFalse(Path(dry["would_write_config"]).exists(),
+                         "dry_run 不能往真实的 core/configs 写文件")
 
     def test_error_message_reaches_the_caller(self):
         """出错时调用方要看到原因,而不只是一句 "Error executing tool <name>"。
@@ -128,10 +156,11 @@ class ProtocolTests(unittest.TestCase):
         """注册包装不能把函数签名弄丢,否则调用方不知道要传什么。"""
         schemas, _ = self.session_result
         created = schemas["create_experiment"]["properties"]
-        for key in ("name", "network", "dataset", "overrides", "work_dir", "overwrite"):
+        for key in ("name", "model", "dataset", "overrides", "work_dir", "overwrite"):
             self.assertIn(key, created)
+        self.assertNotIn("network", created, "旧布局的 network 参数已被 model 取代")
         self.assertIn("required", schemas["create_experiment"])
-        self.assertEqual(schemas["create_experiment"]["required"], ["name", "network", "dataset"])
+        self.assertEqual(schemas["create_experiment"]["required"], ["name", "model", "dataset"])
 
 
 async def _exercise_server():

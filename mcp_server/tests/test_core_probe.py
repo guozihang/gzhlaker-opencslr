@@ -1,114 +1,117 @@
 # -*- encoding: utf-8 -*-
-"""core_probe:复用 core/manager 的真实解析与校验。
+"""core_probe:在 core/ 里跑上游真实的解析链(不需要 torch)。
 
-这些用例跑的是仓库里真实的配置代码(不需要 torch),所以它们同时验证了
-「MCP 看到的配置 = 训练时用的配置」这条前提。
+用例按**线上协议**调用探针子进程(请求走 stdin、响应是最后一行 JSON),拿到的
+``effective`` 就是训练启动时 ``ArgumentManager`` 真正会用的那份配置。上游
+``ConfigManager`` 没有嵌套键/取值校验,这里也如实反映,不假装有白名单。
 """
 
 import unittest
 
-from mcp_server.config import ExperimentConfig
-from mcp_server.core_probe import probe
+import yaml
+
 from mcp_server.paths import RepoLayout
 
-from .helpers import REPO_ROOT
+from .helpers import REPO_ROOT, run_probe
+
+VAC_CONFIG = REPO_ROOT / "core" / "configs" / "vac.yaml"
+VAC_DOC = yaml.safe_load(VAC_CONFIG.read_text(encoding="utf-8"))
+
+
+def request(overrides=None, mode=None, config=VAC_CONFIG):
+    payload = {"config": str(config)}
+    if overrides is not None:
+        payload["overrides"] = overrides
+    if mode:
+        payload["mode"] = mode
+    return payload
 
 
 class ProbeTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.layout = RepoLayout(REPO_ROOT)
-        cls.config = ExperimentConfig(cls.layout)
-        cls.request = {"config": str(cls.layout.exp_config)}
+    """探针的解析结果必须等于配置文件 + 覆盖 + 上游默认值。"""
 
-    def test_resolves_effective_config(self):
-        response = probe(dict(self.request, exp="vac"))
+    def test_resolve_returns_the_effective_config(self):
+        response = run_probe(request(overrides={}))
         self.assertTrue(response["ok"], response)
+        self.assertEqual(response["config_path"], str(VAC_CONFIG))
         effective = response["effective"]
-        self.assertEqual(effective["model"], "vac")
+        self.assertEqual(effective["model"], "models.build_function.build_vac")
         self.assertEqual(effective["dataset"], "phoenix2014")
         self.assertEqual(effective["decode_mode"], "beam")
-        # dataset.yaml 的内容会被并进 dataset_info
-        self.assertIn("dataset_root", effective["dataset_info"])
+        self.assertEqual(effective["num_epoch"], 80)
+        # map() 把 configs/<dataset>.yaml 读进 dataset_info
+        self.assertIn("dict_path", effective["dataset_info"])
 
-    def test_unknown_experiment_reports_available_names(self):
-        response = probe(dict(self.request, exp="does_not_exist"))
-        self.assertFalse(response["ok"])
-        self.assertEqual(response["error_type"], "ValueError")
-        self.assertIn("Available", response["error"])
-
-    def test_scalar_override_wins_over_yaml(self):
-        response = probe(dict(self.request, exp="vac", overrides={"num_epoch": 3, "device": "1"}))
+    def test_scalar_overrides_win_over_the_config_file(self):
+        response = run_probe(request(overrides={"num_epoch": 3, "device": "1"}))
         self.assertTrue(response["ok"], response)
         self.assertEqual(response["effective"]["num_epoch"], 3)
         self.assertEqual(response["effective"]["device"], "1")
+        self.assertEqual(response["overrides"], {"num_epoch": 3, "device": "1"})
 
-    def test_dict_override_deep_merges_instead_of_replacing(self):
-        """字典类配置必须像 YAML 那样深合并,否则会丢掉继承来的兄弟键。"""
-        response = probe(dict(self.request, exp="vac", overrides={"model_args": {"use_bn": 0}}))
+    def test_nested_dict_override_deep_merges_so_siblings_survive(self):
+        response = run_probe(request(overrides={"model_args": {"use_bn": 0}}))
         self.assertTrue(response["ok"], response)
         model_args = response["effective"]["model_args"]
         self.assertEqual(model_args["use_bn"], 0)
-        self.assertEqual(model_args["c2d_type"], "resnet18")
-        self.assertEqual(model_args["num_classes"], 1296)
+        # 只改一个嵌套键,同级的兄弟键必须来自配置文件
+        for key, value in VAC_DOC["model_args"].items():
+            if key == "use_bn":
+                continue
+            self.assertEqual(model_args[key], value, f"{key} 被整体替换丢掉了")
 
-    def test_unknown_override_key_is_rejected(self):
-        response = probe(dict(self.request, exp="vac", overrides={"typo_key": 1}))
-        self.assertFalse(response["ok"])
-        self.assertIn("typo_key", response["error"])
-
-    def test_bad_typed_scalar_override_reports_error_instead_of_exiting(self):
-        """回归:argparse 的类型错误是 SystemExit(BaseException),会穿透 probe()。
-
-        穿透意味着子进程直接以退出码 2 死掉,调用方只拿到一段 usage 转储;
-        修好之后它和未知键一样,是一条带原因的 ok=False。
-        """
-        response = probe(
-            dict(self.request, exp="vac", overrides={"num_epoch": "not-an-int"})
-        )
+    def test_unknown_override_key_returns_a_clean_error(self):
+        response = run_probe(request(overrides={"typo_key": 1}))
         self.assertFalse(response["ok"], response)
         self.assertEqual(response["error_type"], "ValueError")
-        self.assertIn("num-epoch", response["error"])
-        self.assertIn("not-an-int", response["error"])
+        self.assertIn("typo_key", response["error"])
+        self.assertNotIn("Traceback", response["error"])
 
-    def test_invalid_nested_values_are_caught_by_real_validator(self):
-        cases = [
-            {"model_args": {"typo": 1}},                 # 未知嵌套键
-            {"model_args": {"num_classes": "nope"}},     # 类型错误
-            {"optimizer_args": {"optimizer": "ADAM"}},   # 非法取值
-            {"optimizer_args": {"base_lr": -1}},         # 非正学习率
-        ]
-        for overrides in cases:
-            with self.subTest(overrides=overrides):
-                response = probe(dict(self.request, exp="vac", overrides=overrides))
-                self.assertFalse(response["ok"], response)
+    def test_invalid_value_reports_the_argparse_message(self):
+        response = run_probe(request(overrides={"num_epoch": "abc"}))
+        self.assertFalse(response["ok"], response)
+        self.assertEqual(response["error_type"], "ValueError")
+        self.assertIn("--num-epoch", response["error"])
+        self.assertIn("invalid int value", response["error"])
+        self.assertIn("abc", response["error"])
 
-    def test_config_defaults_are_merged_for_keys_missing_from_yaml(self):
-        response = probe(dict(self.request, exp="vac"))
-        effective = response["effective"]
-        # exp.yaml 没写 random_seed,应当落到代码默认值 0
-        self.assertEqual(effective["random_seed"], 0)
-        self.assertEqual(effective["save_interval"], 5)
+    def test_schema_mode_reports_real_values_and_no_whitelist(self):
+        response = run_probe(request(mode="schema"))
+        self.assertTrue(response["ok"], response)
 
-    def test_main_reads_request_from_stdin(self):
-        """子进程协议:请求从 stdin 进来,响应以单行 JSON 写出。"""
-        import io
-        import json
-        import sys
+        # 上游没有运行时控制面:不能报出一张假的「可热改键」表
+        self.assertIsNone(response["hot"]["keys"])
+        self.assertIn("没有运行时控制面", response["hot"]["note"])
 
-        from mcp_server import core_probe
+        # 参数表来自 main.py 的 parser
+        names = {item["name"] for item in response["arguments"]}
+        for expected in ("config", "model", "dataset", "num_epoch", "model_args"):
+            self.assertIn(expected, names)
+        self.assertNotIn("exp", names)
 
-        stdin, stdout = sys.stdin, sys.stdout
-        sys.stdin = io.StringIO('{"exp": "vac"}')
-        sys.stdout = io.StringIO()
-        try:
-            core_probe.main()
-            payload = json.loads(sys.stdout.getvalue())
-        finally:
-            sys.stdin, sys.stdout = stdin, stdout
+        # 嵌套节只有当前值;allowed 一律为 null(没有白名单)
+        nested = response["nested"]["model_args"]
+        self.assertIsNone(nested["allowed"])
+        self.assertEqual(nested["current"]["num_classes"], VAC_DOC["model_args"]["num_classes"])
 
-        self.assertFalse(payload["ok"])
-        self.assertIn("config", payload["error"])
+        # schema 模式顺带回传一次生效配置
+        self.assertTrue(response["resolution"]["ok"], response["resolution"])
+        self.assertEqual(
+            response["resolution"]["effective"]["model"],
+            "models.build_function.build_vac",
+        )
+
+    def test_request_without_config_is_rejected(self):
+        response = run_probe({})
+        self.assertFalse(response["ok"], response)
+        self.assertIn("config", response["error"])
+
+    def test_missing_config_file_is_reported_not_raised(self):
+        missing = REPO_ROOT / "core" / "configs" / "no_such_experiment.yaml"
+        response = run_probe(request(config=missing))
+        self.assertFalse(response["ok"], response)
+        self.assertEqual(response["error_type"], "FileNotFoundError")
+        self.assertIn("no_such_experiment.yaml", response["error"])
 
 
 if __name__ == "__main__":
