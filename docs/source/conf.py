@@ -15,8 +15,6 @@ author = 'guozihang'
 
 extensions = []
 
-language = 'zh_CN'
-
 templates_path = ['_templates']
 exclude_patterns = []
 

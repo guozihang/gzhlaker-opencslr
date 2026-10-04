@@ -1,18 +1,21 @@
 # -*- encoding: utf-8 -*-
-"""实验配置的读取、解析与创建。
+"""实验配置的读取、解析与创建(上游 immc-lab/OpenCSLR 布局)。
 
-仓库只有三个配置入口(core/configs/exp.yaml、network.yaml、dataset.yaml),
-这里围绕它们提供智能体需要的操作:
+上游的配置模型与本仓库旧版(**分节的 exp.yaml + network.yaml + dataset.yaml**)
+完全不同,这里全部按上游来:
 
-- 看清有哪些实验、各自引用哪个网络/数据集(``list_experiments``)
-- 拿到某个实验「声明了什么」以及「实际生效的配置是什么」
-- 新建实验节(``create_experiment``)
-- 为「这次运行」生成带超参数覆盖的临时配置(``materialize_run_config``),
-  不动 exp.yaml
-- 导出超参数清单与取值域(``hyperparameters``)
+- **一个实验 = ``core/configs/`` 下一个扁平 YAML**(``vac.yaml``、``tlp.yaml``、
+  ``baseline.yaml``),顶层直接是参数,里面的 ``model: models.build_function.build_vac``
+  是点号路径;
+- ``core/configs/`` 里**同时**放着数据集配置(``phoenix2014.yaml`` 等,含
+  ``dataset_root``/``dict_path``)。两者靠 ``model:`` 这个键区分:有 ``model:``
+  的是实验,没有的是数据集;
+- 上游 ``ConfigManager`` 只做 ``yaml.load`` + 字典合并,**没有嵌套键/取值校验**
+  (连 ``base_lr`` 为负也照收)。所以这里的「校验」只覆盖能静态判定的部分:
+  参数名是否在 argparse 里、``dataset`` 对应的数据集配置是否存在、
+  ``model`` 点号路径能否在 ``core/`` 里定位到——取值域与嵌套键如实标为未知。
 
-「实际生效的配置」不在这一层重算:优先级与校验规则只存在于 core/manager,
-复刻一份必然漂移,所以委托给 ``core_probe.py`` 跑真实的初始化链。
+「实际生效的配置」仍然委托给 ``core_probe.py`` 跑上游真实的初始化链,不在这里复算。
 """
 
 import ast
@@ -28,25 +31,22 @@ import yaml
 
 from .errors import McpToolError
 
-# 实验名:YAML 键,且不能以下划线开头(下划线节在本仓库里是 anchor 复用用的)
+# 实验名:YAML 文件名(不含扩展名)
 _NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
-_ANCHOR_PREFIX = "_"
 
-# exp.yaml 里供各实验复用的公共节;新建实验时优先继承它,保持与现有节一致的写法
-_COMMON_SECTION = "_common_experiment"
-
-# 临时运行配置的文件名前缀。必须写在 core/configs/ 下:ConfigManager 按配置
-# 所在目录去找 network.yaml 与 dataset.yaml,放到别处会解析不到。下划线开头
-# 也保证它不会被 list_experiments 当成一个实验。
+# 临时运行配置前缀。写在下划线开头:不会被当成实验节,也便于清理。
 EPHEMERAL_PREFIX = "_mcp_run_"
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# 数据集配置的判别键(上游 dataset_manager 读的就是这两个)
+_DATASET_KEYS = ("dict_path", "dataset_root")
 
 _PROBE_PATH = Path(__file__).resolve().with_name("core_probe.py")
 _PROBE_TIMEOUT_SECONDS = 180
 
 
 class ExperimentConfig:
-    """配置文件视图(每次调用都重新读盘,避免拿到过期配置)。"""
+    """上游配置目录的视图(每次调用都重新读盘,避免拿到过期配置)。"""
 
     def __init__(self, layout):
         self.layout = layout
@@ -67,131 +67,148 @@ class ExperimentConfig:
         if data is None:
             return {}
         if not isinstance(data, dict):
-            raise McpToolError(f"{label} 顶层必须是映射(实验名 -> 配置节)")
+            raise McpToolError(f"{label} 顶层必须是映射(参数名 -> 值)")
         return data
 
-    def exp_doc(self):
-        return self._load_yaml(self.layout.exp_config, "exp 配置")
+    def config_path_for(self, name):
+        """实验/数据集名 -> 配置文件路径。"""
+        if not _NAME_PATTERN.match(str(name)):
+            raise McpToolError(f"名字 {name!r} 不合法:只允许字母开头的字母/数字/._-")
+        return self.layout.configs_dir / f"{name}.yaml"
 
-    def network_doc(self):
-        return self._load_yaml(self.layout.network_config, "network 配置")
+    def experiment_doc(self, name):
+        """某个实验配置文件的原始内容。"""
+        path = self.config_path_for(name)
+        if not path.is_file():
+            raise McpToolError(
+                f"实验 {name!r} 不存在({path});可用实验: {self.experiment_names()}"
+            )
+        doc = self._load_yaml(path, f"实验配置 {name}")
+        if "model" not in doc:
+            raise McpToolError(
+                f"{path} 里没有 'model:' 键,它看起来是数据集配置而不是实验配置"
+            )
+        return doc
 
-    def dataset_doc(self):
-        return self._load_yaml(self.layout.dataset_config, "dataset 配置")
+    def _all_config_docs(self):
+        """configs/ 下所有非临时 YAML:名字 -> 内容。"""
+        docs = {}
+        if not self.layout.configs_dir.is_dir():
+            return docs
+        for path in sorted(self.layout.configs_dir.glob("*.yaml")):
+            if path.stem.startswith(EPHEMERAL_PREFIX) or path.stem.startswith("_"):
+                continue
+            try:
+                docs[path.stem] = self._load_yaml(path, f"配置 {path.stem}")
+            except McpToolError:
+                docs[path.stem] = None  # 坏文件也列出来,由 list_experiments 报问题
+        return docs
 
     def experiment_names(self):
-        """全部可运行的实验名(排除下划线开头的 anchor 复用节)。"""
+        """全部实验名 = configs/ 下带 ``model:`` 的 YAML。"""
         return sorted(
-            name for name in self.exp_doc() if not str(name).startswith(_ANCHOR_PREFIX)
+            name for name, doc in self._all_config_docs().items()
+            if isinstance(doc, dict) and doc.get("model")
         )
 
+    def dataset_names(self):
+        """全部数据集名 = configs/ 下带 ``dataset_root``/``dict_path`` 的 YAML。"""
+        names = []
+        for name, doc in self._all_config_docs().items():
+            if isinstance(doc, dict) and any(key in doc for key in _DATASET_KEYS):
+                names.append(name)
+        return sorted(names)
+
     def list_experiments(self):
-        """实验总览:名称、引用的网络与数据集、关键设置。"""
-        exp_doc = self.exp_doc()
-        networks = self.network_doc()
-        datasets = self.dataset_doc()
+        """实验总览:名称、模型点号路径、数据集、关键设置与明显问题。"""
+        docs = self._all_config_docs()
+        datasets = set(self.dataset_names())
+        allowed = self.allowed_argument_names()
         items = []
-        for name in sorted(k for k in exp_doc if not str(k).startswith(_ANCHOR_PREFIX)):
-            section = exp_doc[name] if isinstance(exp_doc[name], dict) else {}
-            network_name = section.get("network")
-            dataset_name = section.get("dataset")
+        for name in sorted(docs):
+            doc = docs[name]
+            if not isinstance(doc, dict) or not doc.get("model"):
+                continue
             problems = []
-            if not network_name:
-                problems.append("缺少 network 字段")
-            elif network_name not in networks:
-                problems.append(f"network {network_name!r} 未在 network.yaml 中定义")
-            if not dataset_name:
+            model = doc.get("model")
+            if not isinstance(model, str) or not model:
+                problems.append("model 不是非空字符串")
+            else:
+                reason = self._model_reference_problem(model)
+                if reason:
+                    problems.append(reason)
+            dataset = doc.get("dataset")
+            if not dataset:
                 problems.append("缺少 dataset 字段")
-            elif dataset_name not in datasets:
-                problems.append(f"dataset {dataset_name!r} 未在 dataset.yaml 中定义")
+            elif dataset not in datasets:
+                problems.append(f"数据集配置 configs/{dataset}.yaml 不存在")
+            unknown = sorted(set(doc) - allowed)
+            if unknown:
+                problems.append(f"以下键不在 main.py 的参数表里,启动时会报错: {unknown}")
             items.append(
                 {
                     "name": name,
-                    "network": network_name,
-                    "dataset": dataset_name,
-                    "phase": section.get("phase"),
-                    "work_dir": section.get("work_dir"),
-                    "device": section.get("device"),
-                    "num_epoch": section.get("num_epoch"),
+                    "config_path": str(self.config_path_for(name)),
+                    "model": model,
+                    "dataset": dataset,
+                    "phase": doc.get("phase"),
+                    "work_dir": doc.get("work_dir"),
+                    "device": doc.get("device"),
+                    "num_epoch": doc.get("num_epoch"),
                     "problems": problems,
                 }
             )
         return items
 
     def get_experiment_config(self, name):
-        """某个实验「声明了什么」:exp 节、引用的网络节与数据集节。
+        """某个实验**声明**了什么(配置文件原文 + 静态问题清单)。
 
-        合并方式与 ConfigManager.load_experiment 一致:网络节打底,exp 节覆盖
-        同名键,并去掉仅作引用用的 ``network`` 键(浅合并,嵌套字典不递归)。
+        要看合并默认值之后「实际生效」的完整配置,用 ``resolve_experiment``。
         """
-        exp_doc = self.exp_doc()
-        if name not in exp_doc:
-            raise McpToolError(
-                f"实验 {name!r} 不存在于 {self.layout.exp_config};"
-                f"可用实验: {self.experiment_names()}"
-            )
-        section = exp_doc[name]
-        if not isinstance(section, dict):
-            raise McpToolError(f"实验 {name!r} 的配置节必须是映射")
-
-        network_name = section.get("network")
-        dataset_name = section.get("dataset")
-        networks = self.network_doc()
-        datasets = self.dataset_doc()
-
-        network_section = networks.get(network_name) or {}
-        dataset_section = datasets.get(dataset_name) or {}
-
-        merged = dict(network_section)
-        merged.update(section)
-        merged.pop("network", None)
-
+        doc = self.experiment_doc(name)
         notes = []
-        if network_name and network_name not in networks:
+        model = doc.get("model")
+        reason = self._model_reference_problem(model) if isinstance(model, str) else "model 不是字符串"
+        if reason:
+            notes.append(reason)
+        dataset = doc.get("dataset")
+        if dataset and dataset not in set(self.dataset_names()):
             notes.append(
-                f"network {network_name!r} 未在 network.yaml 中定义;"
-                f"可用: {sorted(k for k in networks if not str(k).startswith('_'))}"
+                f"数据集配置 configs/{dataset}.yaml 不存在;"
+                f"可用: {self.dataset_names()}"
             )
-        if dataset_name and dataset_name not in datasets:
-            notes.append(
-                f"dataset {dataset_name!r} 未在 dataset.yaml 中定义;"
-                f"可用: {sorted(k for k in datasets if not str(k).startswith('_'))}"
-            )
-        unknown = sorted(set(merged) - self.allowed_argument_names() - {"dataset"})
+        unknown = sorted(set(doc) - self.allowed_argument_names())
         if unknown:
-            notes.append(f"以下键不是 main.py 的参数,启动时会被拒绝: {unknown}")
-
+            notes.append(
+                f"以下键不是 main.py 的参数,上游 map() 会断言失败: {unknown};"
+                f"可用键见 main.py --help"
+            )
+        notes.append(
+            "上游 ConfigManager 没有嵌套键/取值校验:model_args 等字典里的键"
+            "写错不会在启动前被拦住"
+        )
         return {
             "name": name,
-            "config_path": str(self.layout.exp_config),
-            "network": {"name": network_name, "config": network_section},
-            "dataset": {"name": dataset_name, "config": dataset_section},
-            "arguments": merged,
+            "config_path": str(self.config_path_for(name)),
+            "config": doc,
             "notes": notes,
         }
 
     def list_options(self):
-        """可选项:网络、数据集、实验名,以及每个网络用到的模型名。"""
-        networks = {
-            name: section.get("model") if isinstance(section, dict) else None
-            for name, section in self.network_doc().items()
-            if not str(name).startswith(_ANCHOR_PREFIX)
-        }
-        datasets = sorted(
-            k for k in self.dataset_doc() if not str(k).startswith(_ANCHOR_PREFIX)
-        )
+        """可选项:实验名、模型点号路径、数据集名。"""
+        experiments = {item["name"]: item["model"] for item in self.list_experiments()}
         return {
-            "experiments": self.experiment_names(),
-            "networks": networks,
-            "datasets": datasets,
-            "exp_config": str(self.layout.exp_config),
+            "experiments": sorted(experiments),
+            "models": sorted({model for model in experiments.values() if model}),
+            "datasets": self.dataset_names(),
+            "configs_dir": str(self.layout.configs_dir),
         }
 
     def allowed_argument_names(self):
         """main.py 接受的参数名(蛇形),从 argument_manager.py 静态提取。
 
-        直接解析源码而不是导入,是为了在没装 torch 的机器上也能用;每次按
-        文件 mtime 失效缓存,新增参数后无需重启 MCP 服务。
+        直接解析源码而不是导入,是为了在没装 torch/toml 的机器上也能用;
+        每次按文件 mtime 失效缓存,新增参数后无需重启 MCP 服务。
         """
         source_path = self.layout.core_dir / "manager" / "argument_manager.py"
         try:
@@ -205,50 +222,60 @@ class ExperimentConfig:
             self._argument_names_cache_key = cache_key
         return self._argument_names_cache
 
+    def _model_reference_problem(self, dotted):
+        """静态检查 ``models.build_function.build_vac`` 这种点号路径能否定位到。
+
+        上游 ``ModuleManager.load`` 用 importlib 动态导入,写错要等到训练启动
+        才炸。这里只做静态定位(文件 + 属性名),够拦住绝大多数拼写错误。
+        """
+        if not isinstance(dotted, str) or "." not in dotted:
+            return f"model {dotted!r} 不是 '包.模块.函数' 形式的点号路径"
+        module_path, attr = dotted.rsplit(".", 1)
+        relative = Path(*module_path.split("."))
+        for candidate in (self.layout.core_dir / relative.with_suffix(".py"),
+                          self.layout.core_dir / relative / "__init__.py"):
+            if candidate.is_file():
+                try:
+                    tree = ast.parse(candidate.read_text(encoding="utf-8"))
+                except SyntaxError as exc:
+                    return f"{candidate} 解析失败: {exc}"
+                names = {node.name for node in tree.body
+                         if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+                names |= {target.id for node in tree.body if isinstance(node, ast.Assign)
+                          for target in node.targets if isinstance(target, ast.Name)}
+                if attr not in names:
+                    return f"{candidate} 里没有 {attr!r}"
+                return None
+        return f"model 指向的模块 {module_path!r} 在 core/ 下找不到({relative}.py)"
+
     # ------------------------------------------------------------------ 解析
 
-    def _inherited_section(self, section, network_section):
-        """复现 ConfigManager 的合并结果:网络节打底,实验节覆盖(浅合并)。"""
-        merged = dict(network_section or {})
-        merged.update(section or {})
-        merged.pop("network", None)
-        return merged
-
     def resolve(self, name, overrides=None, timeout=_PROBE_TIMEOUT_SECONDS, config_path=None):
-        """跑真实的初始化链,得到实际生效的配置与校验结论。
+        """跑上游真实的初始化链,得到实际生效的配置。
 
         Args:
-            name: 实验名。
-            overrides: 覆盖项(与 exp.yaml 同名的参数);字典类配置按 YAML
-                的语义深合并。
+            name: 实验名(= configs/ 下的文件名)。
+            overrides: 覆盖项;字典类按 YAML 语义深合并。
             timeout: 子进程超时(秒)。
-            config_path: 要解析的配置文件;默认 exp.yaml。生成临时运行配置后
-                用它校验「这次真正要跑的东西」。
-
-        Returns:
-            dict: ``core_probe`` 的响应,``ok`` 为 False 时带 ``error`` 说明。
+            config_path: 要解析的配置文件;默认该实验自己的文件。生成临时运行
+                配置后用它可以校验「这次真正要跑的东西」。
         """
         request = {
-            "exp": name,
-            "config": str(config_path or self.layout.exp_config),
+            "config": str(config_path or self.config_path_for(name)),
             "overrides": overrides or {},
         }
         return self._probe(request, name, timeout)
 
     def hyperparameters(self, name, config_path=None):
-        """导出超参数清单:能改哪些、当前生效值、类型/取值域、能否热改。
-
-        schema 与当前值都来自真实 parser 与真实初始化链(一次子进程搞定)。
-        """
+        """超参数清单:参数表 + 当前生效值 + 能否热改(上游没有热改)。"""
         request = {
             "mode": "schema",
-            "exp": name,
-            "config": str(config_path or self.layout.exp_config),
+            "config": str(config_path or self.config_path_for(name)),
         }
         return self._probe(request, name)
 
     def _probe(self, request, label, timeout=_PROBE_TIMEOUT_SECONDS):
-        """把请求交给子进程里的真实初始化链,回传 JSON 响应。"""
+        """把请求交给子进程里的上游初始化链,回传 JSON 响应。"""
         try:
             proc = subprocess.run(
                 [self.layout.python, str(_PROBE_PATH)],
@@ -276,243 +303,114 @@ class ExperimentConfig:
 
     # ------------------------------------------------------------------ 写入
 
-    def create_experiment(
-        self,
-        name,
-        network,
-        dataset,
-        overrides=None,
-        work_dir=None,
-        device=None,
-        phase=None,
-        num_epoch=None,
-        overwrite=False,
-    ):
-        """新建(或整节替换)一个实验节。
-
-        新节默认继承 ``_common_experiment``(与现有实验写法一致,后续改公共
-        设置会一起生效);exp.yaml 是逐行追加的,其余实验节与注释保持原样。
+    def create_experiment(self, name, model, dataset, overrides=None,
+                          work_dir=None, device=None, phase=None, num_epoch=None,
+                          overwrite=False):
+        """在 configs/ 下新建一个实验配置文件(上游=一实验一文件)。
 
         Args:
-            name: 实验名,同时作为 ``--exp`` 的取值。
-            network: network.yaml 中的网络名。
-            dataset: dataset.yaml 中的数据集名。
-            overrides: 其它实验级参数(键同 main.py 参数名),可为嵌套字典。
-            work_dir: 输出目录;不传则沿用公共节里的值。
-            device: GPU 序号(如 "0" 或 "0,1")。
-            phase: train / test。
-            num_epoch: 训练轮数。
-            overwrite: 为 True 时整节替换已有实验(该节内的注释会丢失)。
-
-        Returns:
-            dict: 写入结果,含写入的配置节与解析校验结论。
+            name: 实验名,同时是文件名(``<name>.yaml``)与客户端的引用名。
+            model: 模型点号路径,如 ``models.build_function.build_vac``。
+            dataset: 数据集名,必须在 configs/ 下有 ``<dataset>.yaml``。
+            overrides: 其它参数(键同 main.py 参数名),可为嵌套字典。
+            work_dir/device/phase/num_epoch: 常用参数的便捷入口。
+            overwrite: 为 True 时覆盖同名文件。
         """
-        self._validate_experiment_name(name)
-
-        exp_doc = self.exp_doc()
-        exists = name in exp_doc
-        if exists and not overwrite:
+        path = self.config_path_for(name)
+        if path.exists() and not overwrite:
+            raise McpToolError(f"实验 {name!r} 已存在({path});如需覆盖请传 overwrite=True")
+        if not isinstance(model, str) or not model:
+            raise McpToolError("model 必须是非空字符串(点号路径)")
+        reason = self._model_reference_problem(model)
+        if reason:
+            raise McpToolError(f"model 无效: {reason}")
+        if dataset not in set(self.dataset_names()):
             raise McpToolError(
-                f"实验 {name!r} 已存在;如需整节替换请传 overwrite=True,"
-                "或换一个实验名"
-            )
-
-        networks = self.network_doc()
-        if network not in networks:
-            raise McpToolError(
-                f"network {network!r} 未在 network.yaml 中定义;"
-                f"可用: {sorted(k for k in networks if not str(k).startswith('_'))}"
-            )
-        datasets = self.dataset_doc()
-        if dataset not in datasets:
-            raise McpToolError(
-                f"dataset {dataset!r} 未在 dataset.yaml 中定义;"
-                f"可用: {sorted(k for k in datasets if not str(k).startswith('_'))}"
+                f"数据集 {dataset!r} 没有对应的 configs/{dataset}.yaml;"
+                f"可用: {self.dataset_names()}"
             )
 
         fields = copy.deepcopy(overrides or {})
         if not isinstance(fields, dict):
             raise McpToolError("overrides 必须是映射(参数名 -> 值)")
-        fields["network"] = network
+        fields["model"] = model
         fields["dataset"] = dataset
-        for key, value in (
-            ("work_dir", work_dir),
-            ("device", device),
-            ("phase", phase),
-            ("num_epoch", num_epoch),
-        ):
+        for key, value in (("work_dir", work_dir), ("device", device),
+                           ("phase", phase), ("num_epoch", num_epoch)):
             if value is not None:
                 fields[key] = value
 
-        allowed = self.allowed_argument_names() | {"network"}
+        allowed = self.allowed_argument_names()
         unknown = sorted(set(fields) - allowed)
         if unknown:
             raise McpToolError(
-                f"以下键不是 main.py 的参数: {unknown};"
-                f"可用键: {sorted(allowed)}"
+                f"以下键不是 main.py 的参数: {unknown};可用键: {sorted(allowed)}"
             )
 
-        # 嵌套字典会整体替换网络节里的同名字典(ConfigManager 是浅合并),所以
-        # 字典类覆盖项要先按「继承来的基值」铺开再合并,否则只改一个嵌套键
-        # (如 model_args.use_bn)会把 num_classes 之类的兄弟键一起丢掉。
-        inherited = self._inherited_section(
-            exp_doc.get(_COMMON_SECTION) if isinstance(exp_doc.get(_COMMON_SECTION), dict) else {},
-            networks.get(network) or {},
-        )
-        fields = _merge_nested_overrides(fields, inherited)
+        ordered = _ordered_items(fields, ["model", "dataset", "work_dir", "device", "phase"])
+        text = yaml.safe_dump(dict(ordered), allow_unicode=True,
+                              default_flow_style=False, sort_keys=False, indent=2)
+        _atomic_write(path, text)
 
-        text = self.layout.exp_config.read_text(encoding="utf-8")
-        if not text.endswith("\n"):
-            text += "\n"
-        # 节的键名与 anchor 名不一定相同(如 `_common_experiment: &common_experiment`),
-        # 所以用文本里真实的 anchor 名,而不是拿键名去拼
-        common_anchor = _find_anchors(text).get(_COMMON_SECTION)
-        block = self._render_section(name, fields, common_anchor)
-
-        if exists:
-            start, end = _section_line_range(text, name)
-            new_text = text[:start] + block + text[end:]
-        else:
-            new_text = text + ("\n" if not text.endswith("\n\n") else "") + block
-
-        # 先整份重新解析一遍:既校验 YAML 语法,也确认 anchor 引用可用
-        try:
-            parsed = yaml.safe_load(new_text)
-        except yaml.YAMLError as exc:
-            raise McpToolError(f"生成的新配置无法解析,已放弃写入: {exc}")
-        if not isinstance(parsed, dict) or name not in parsed:
-            raise McpToolError("生成的新配置缺少目标实验节,已放弃写入")
-
-        _atomic_write(self.layout.exp_config, new_text)
-
-        result = {
-            "name": name,
-            "config_path": str(self.layout.exp_config),
-            "replaced_existing": bool(exists),
-            "section": parsed[name],
-            "inherits_common": _COMMON_SECTION in exp_doc,
-        }
-        # 用真实初始化链复核一次;失败也保留写入结果,由调用方决定是否回退
         verdict = self.resolve(name)
-        result["validation"] = {
-            "ok": verdict.get("ok"),
-            "error": verdict.get("error"),
-            "error_type": verdict.get("error_type"),
+        return {
+            "name": name,
+            "config_path": str(path),
+            "replaced_existing": bool(overwrite and fields),
+            "config": _load_yaml_text(text),
+            "validation": {
+                "ok": verdict.get("ok"),
+                "error": verdict.get("error"),
+                "error_type": verdict.get("error_type"),
+            },
         }
-        return result
-
-    def _validate_experiment_name(self, name):
-        if not isinstance(name, str) or not _NAME_PATTERN.match(name):
-            raise McpToolError(
-                f"实验名 {name!r} 不合法:只能由字母开头,包含字母/数字/下划线/点/短横线"
-            )
-
-    def _render_section(self, name, fields, common_anchor):
-        """生成实验节的 YAML 文本(带缩进与公共节继承)。
-
-        Args:
-            common_anchor: exp.yaml 里公共节的 anchor 名;为 None 时写出完整
-                的独立节(不依赖 anchor)。
-        """
-        ordered = dict(
-            _ordered_items(fields, ["network", "dataset", "work_dir", "device", "phase"])
-        )
-        # 整节一起 dump 再统一缩进:逐个键 dump 时 PyYAML 会把单键映射写成
-        # 流式({network: x}),嵌进块映射里就成了非法 YAML
-        body = yaml.safe_dump(
-            ordered,
-            allow_unicode=True,
-            default_flow_style=False,
-            sort_keys=False,
-            indent=2,
-        ).rstrip("\n")
-
-        lines = [f"{name}:"]
-        if common_anchor:
-            lines.append(f"  <<: *{common_anchor}")
-        lines.extend(("  " + line) if line.strip() else "" for line in body.splitlines())
-        return "\n".join(lines) + "\n"
 
     # -------------------------------------------------------------- 临时运行配置
 
     def ephemeral_config_path(self, run_id):
-        """临时运行配置的路径(与 exp.yaml 同目录,ConfigManager 才能找到另外两个配置)。"""
+        """临时运行配置的路径(写在 configs/ 下,与实验配置同目录)。"""
         if not _RUN_ID_PATTERN.match(str(run_id)):
             raise McpToolError(f"非法的 run_id: {run_id!r}")
         return self.layout.configs_dir / f"{EPHEMERAL_PREFIX}{run_id}.yaml"
 
     def materialize_run_config(self, name, overrides=None, run_id=None):
-        """把「某个实验 + 超参数覆盖」落成一个自包含的临时配置,不动 exp.yaml。
+        """把「某个实验 + 超参数覆盖」落成一份临时配置,不改动原文件。
 
-        覆盖项按 YAML 语义深合并(与 ``resolve_experiment`` 的 overrides 一致),
-        所以只改一个嵌套键不会丢掉网络节里的兄弟键。生成的配置展开全部 anchor,
-        并把 network 节里实际生效的键一并写进去,因此它本身就是这次运行的快照:
-        即使之后 network.yaml 改了,这次运行的配置也可复现。
+        上游一个实验就是一个文件,所以「覆盖」= 复制该文件再把覆盖项深合并进去
+        (字典类必须深合并:上游 ``map()`` 是 ``set_defaults``,整块替换会丢掉
+        原文件里的兄弟键)。上游 ``ConfigManager`` 只加载你 ``--config`` 指向的
+        那个文件,所以临时文件放哪都能跑;放在 configs/ 便于排查,名字以
+        ``_mcp_run_`` 开头,不会被当成实验。
 
         Args:
-            name: 实验名(临时配置里仍然用它作为节名)。
-            overrides: 超参数覆盖项,键同 main.py 参数名;可为嵌套字典。
+            name: 实验名。
+            overrides: 覆盖项,键同 main.py 参数名,可为嵌套字典。
             run_id: 运行 id,用于生成唯一文件名。
 
         Returns:
-            dict: 临时配置路径、快照路径(放在运行记录目录)与生效覆盖项。
+            dict: 临时配置路径、快照路径与生效覆盖项。
         """
         if not isinstance(overrides, dict):
             raise McpToolError("overrides 必须是映射(超参数名 -> 值)")
         if not run_id:
             raise McpToolError("生成临时运行配置需要 run_id")
 
-        exp_doc = self.exp_doc()
-        if name not in exp_doc:
-            raise McpToolError(
-                f"实验 {name!r} 不存在于 {self.layout.exp_config};"
-                f"可用实验: {self.experiment_names()}"
-            )
-        section = exp_doc[name]
-        if not isinstance(section, dict):
-            raise McpToolError(f"实验 {name!r} 的配置节必须是映射")
-
-        network_name = section.get("network")
-        if not network_name:
-            raise McpToolError(f"实验 {name!r} 缺少 network 字段")
-        networks = self.network_doc()
-        if network_name not in networks:
-            raise McpToolError(
-                f"network {network_name!r} 未在 network.yaml 中定义;"
-                f"可用: {sorted(k for k in networks if not str(k).startswith(_ANCHOR_PREFIX))}"
-            )
-        dataset_name = section.get("dataset")
-        if not dataset_name:
-            raise McpToolError(f"实验 {name!r} 缺少 dataset 字段")
-        if dataset_name not in self.dataset_doc():
-            raise McpToolError(
-                f"dataset {dataset_name!r} 未在 dataset.yaml 中定义;"
-                f"可用: {self.list_options()['datasets']}"
-            )
-
-        allowed = self.allowed_argument_names() | {"network", "dataset"}
+        doc = self.experiment_doc(name)
+        allowed = self.allowed_argument_names()
         unknown = sorted(set(overrides) - allowed)
         if unknown:
             raise McpToolError(
                 f"以下键不是 main.py 的参数: {unknown};可用键: {sorted(allowed)}"
             )
 
-        inherited = self._inherited_section(section, networks.get(network_name) or {})
-        effective = _deep_merge(inherited, overrides)
-        document = {name: {"network": network_name, **effective}}
+        merged = _deep_merge(doc, overrides)
+        merged.setdefault("dataset", doc.get("dataset"))
 
         path = self.ephemeral_config_path(run_id)
-        text = yaml.safe_dump(
-            document,
-            allow_unicode=True,
-            default_flow_style=False,
-            sort_keys=False,
-            indent=2,
-        )
+        text = yaml.safe_dump(merged, allow_unicode=True,
+                              default_flow_style=False, sort_keys=False, indent=2)
         _atomic_write(path, text)
 
-        # 运行记录目录里留一份快照:临时配置在进程结束后会被清理,快照保证这次
-        # 运行到底用了什么配置仍然查得到。
         snapshot = self.layout.runs_dir / f"{run_id}.config.yaml"
         try:
             snapshot.parent.mkdir(parents=True, exist_ok=True)
@@ -524,9 +422,9 @@ class ExperimentConfig:
             "run_id": run_id,
             "path": str(path),
             "snapshot": str(snapshot) if snapshot else None,
-            "section": name,
-            "network": network_name,
-            "dataset": dataset_name,
+            "name": name,
+            "model": merged.get("model"),
+            "dataset": merged.get("dataset"),
             "overrides": overrides,
         }
 
@@ -536,7 +434,7 @@ class ExperimentConfig:
             return False
         candidate = Path(path)
         if candidate.parent != self.layout.configs_dir:
-            return False  # 只删自己写在 configs 目录下的临时配置
+            return False
         if not candidate.name.startswith(EPHEMERAL_PREFIX):
             return False
         try:
@@ -561,18 +459,14 @@ class ExperimentConfig:
 
 
 def _ordered_items(mapping, preferred):
-    """把常用键排在前面,其余键保持原顺序,便于人工阅读导出的实验节。"""
+    """把常用键排在前面,其余键保持原顺序,便于人工阅读导出的配置。"""
     ordered = [(key, mapping[key]) for key in preferred if key in mapping]
     ordered += [(key, value) for key, value in mapping.items() if key not in preferred]
     return ordered
 
 
 def _deep_merge(base, override):
-    """递归合并:嵌套字典逐层合并,其它值由 override 覆盖。
-
-    与 ``ArgumentManager._deep_merge`` 同一语义(命令行覆盖 YAML 时用的就是
-    它),保证「MCP 预览到的」与「真正解析出来的」一致。
-    """
+    """递归合并:嵌套字典逐层合并,其它值由 override 覆盖。"""
     result = copy.deepcopy(base) if isinstance(base, dict) else {}
     for key, value in (override or {}).items():
         if isinstance(result.get(key), dict) and isinstance(value, dict):
@@ -580,27 +474,6 @@ def _deep_merge(base, override):
         else:
             result[key] = copy.deepcopy(value)
     return result
-
-
-def _merge_nested_overrides(fields, inherited):
-    """把字典类覆盖项按「继承来的基值」铺开。
-
-    只展开字典:标量覆盖项不受影响,而嵌套字典如果直接写进 exp 节,会在
-    ConfigManager 的浅合并里整体替换网络节里的同名字典,丢掉没提到的兄弟键。
-    """
-    merged = dict(fields)
-    for key, value in fields.items():
-        if isinstance(value, dict) and isinstance(inherited.get(key), dict):
-            merged[key] = _deep_merge(inherited[key], value)
-    return merged
-
-
-def _find_anchors(text):
-    """找出顶层节定义的 anchor:``_common_experiment: &common_experiment`` -> 键名到 anchor 名。"""
-    return {
-        match.group(1): match.group(2)
-        for match in re.finditer(r"^([A-Za-z0-9_.-]+)\s*:\s*&([^\s#]+)", text, re.MULTILINE)
-    }
 
 
 def _extract_argument_names(source_path):
@@ -623,37 +496,11 @@ def _extract_argument_names(source_path):
     return names
 
 
-def _section_line_range(text, name):
-    """定位某个顶层节在文本里的行区间 [start, end)。
-
-    遇到下一个顶格(非缩进、非空、非注释)的行即认为本节结束。
-    """
-    lines = text.splitlines(keepends=True)
-    start = None
-    for index, line in enumerate(lines):
-        if line.startswith(_ANCHOR_PREFIX) or line[:1].isspace() or not line.strip():
-            continue
-        if line.split(":", 1)[0].strip() == name:
-            start = index
-            break
-    if start is None:
-        raise McpToolError(f"在配置文本里定位不到实验节 {name!r}")
-
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        line = lines[index]
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if not line[:1].isspace():
-            end = index
-            break
-    return sum(len(line) for line in lines[:start]), sum(len(line) for line in lines[:end])
-
-
 def _atomic_write(path, text):
     """原子落盘:先写同目录临时文件再替换,避免中断留下半个配置。"""
     path = Path(path)
-    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".exp_", suffix=".yaml")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".cfg_", suffix=".yaml")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write(text)
@@ -661,6 +508,13 @@ def _atomic_write(path, text):
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)
         raise
+
+
+def _load_yaml_text(text):
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
 
 
 def _last_json_line(text):

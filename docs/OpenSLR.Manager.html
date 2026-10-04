@@ -1,0 +1,208 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenSLR.Manager &mdash; OpenSLR  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=5929fcd5"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="OpenSLR.Pipeline" href="OpenSLR.Pipline.html" />
+    <link rel="prev" title="OpenSLR.Dataset" href="OpenSLR.Dataset.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            OpenSLR
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="Quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="OpenSLR.html">OpenSLR</a></li>
+<li class="toctree-l1"><a class="reference internal" href="OpenSLR.Dataset.html">OpenSLR.Dataset</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">OpenSLR.Manager</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#structure">Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#sub-managers">Sub-Managers</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#argument-manager">Argument Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#config-manager">Config Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#log-manager">Log Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#device-manager">Device Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#module-manager">Module Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#experiment-manager">Experiment Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#collect-manager">Collect Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#dataloader-manager">Dataloader Manager</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#dataset-manager">Dataset Manager</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#global-state-management">Global State Management</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="OpenSLR.Pipline.html">OpenSLR.Pipeline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="OpenSLR.Build_Function.html">OpenSLR.Build_Function</a></li>
+<li class="toctree-l1"><a class="reference internal" href="OpenSLR.Container.html">OpenSLR.Container</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">OpenSLR</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">OpenSLR.Manager</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/OpenSLR.Manager.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="openslr-manager">
+<h1>OpenSLR.Manager<a class="headerlink" href="#openslr-manager" title="Link to this heading"></a></h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading"></a></h2>
+<p>The Manager component is the central coordinator of the OpenSLR toolbox. It handles global state management, configuration, logging, device management, and more.</p>
+</section>
+<section id="structure">
+<h2>Structure<a class="headerlink" href="#structure" title="Link to this heading"></a></h2>
+<p>The Manager is divided into two categories:</p>
+<ol class="arabic simple">
+<li><p><strong>Base Managers</strong>: Common utilities shared across all managers.</p></li>
+<li><p><strong>Deep Learning Managers</strong>: Specialized managers for training and evaluation.</p></li>
+</ol>
+</section>
+<section id="sub-managers">
+<h2>Sub-Managers<a class="headerlink" href="#sub-managers" title="Link to this heading"></a></h2>
+<section id="argument-manager">
+<h3>Argument Manager<a class="headerlink" href="#argument-manager" title="Link to this heading"></a></h3>
+<p>Parses and stores command-line arguments.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">OpenSLR.Manager</span><span class="w"> </span><span class="kn">import</span> <span class="n">ArgumentManager</span>
+<span class="n">args</span> <span class="o">=</span> <span class="n">ArgumentManager</span><span class="o">.</span><span class="n">get_args</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="config-manager">
+<h3>Config Manager<a class="headerlink" href="#config-manager" title="Link to this heading"></a></h3>
+<p>Loads and validates configuration files.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">OpenSLR.Manager</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConfigManager</span>
+<span class="n">cfg</span> <span class="o">=</span> <span class="n">ConfigManager</span><span class="o">.</span><span class="n">get_config</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="log-manager">
+<h3>Log Manager<a class="headerlink" href="#log-manager" title="Link to this heading"></a></h3>
+<p>Manages system-wide logging.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">OpenSLR.Manager</span><span class="w"> </span><span class="kn">import</span> <span class="n">LogManager</span>
+<span class="n">logger</span> <span class="o">=</span> <span class="n">LogManager</span><span class="o">.</span><span class="n">get_logger</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="device-manager">
+<h3>Device Manager<a class="headerlink" href="#device-manager" title="Link to this heading"></a></h3>
+<p>Specifies GPU devices for training.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">OpenSLR.Manager</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeviceManager</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">DeviceManager</span><span class="o">.</span><span class="n">get_device</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="module-manager">
+<h3>Module Manager<a class="headerlink" href="#module-manager" title="Link to this heading"></a></h3>
+<p>Handles registration and instantiation of modules.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">OpenSLR.Manager</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModuleManager</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">ModuleManager</span><span class="o">.</span><span class="n">get_module</span><span class="p">(</span><span class="s2">&quot;ResNet&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="experiment-manager">
+<h3>Experiment Manager<a class="headerlink" href="#experiment-manager" title="Link to this heading"></a></h3>
+<p>Manages experiment artifacts (directories, checkpoints).</p>
+</section>
+<section id="collect-manager">
+<h3>Collect Manager<a class="headerlink" href="#collect-manager" title="Link to this heading"></a></h3>
+<p>Aggregates data across processes for distributed training.</p>
+</section>
+<section id="dataloader-manager">
+<h3>Dataloader Manager<a class="headerlink" href="#dataloader-manager" title="Link to this heading"></a></h3>
+<p>Coordinates data loader creation.</p>
+</section>
+<section id="dataset-manager">
+<h3>Dataset Manager<a class="headerlink" href="#dataset-manager" title="Link to this heading"></a></h3>
+<p>Manages dataset registration and metadata.</p>
+</section>
+</section>
+<section id="global-state-management">
+<h2>Global State Management<a class="headerlink" href="#global-state-management" title="Link to this heading"></a></h2>
+<p>All managers use Python class variables and <cite>&#64;classmethod</cite> decorators to ensure global access without passing object instances.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="OpenSLR.Dataset.html" class="btn btn-neutral float-left" title="OpenSLR.Dataset" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="OpenSLR.Pipline.html" class="btn btn-neutral float-right" title="OpenSLR.Pipeline" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, guozihang.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

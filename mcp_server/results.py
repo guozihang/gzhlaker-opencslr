@@ -1,23 +1,27 @@
 # -*- encoding: utf-8 -*-
 """实验结果、日志与 checkpoint 的读取。
 
-产物命名(与 core/manager 里的写入方保持一致):
+**上游 core 不落盘任何结果 JSON**,所以这里的指标来自日志文本解析(这是
+MCP 层对上游能力的如实适配,不是 core 的改动):
 
-- ``<work_dir>/experiment_result.json``      test 分割的权威结果
-- ``<work_dir>/experiment_result_<split>.json``  其它分割(如 dev)
-- ``<work_dir>/sample_statistics_<split>.json``   样本成功/跳过/失败统计
-- ``<work_dir>/log_<时间戳>.log``            loguru 文件日志
+- ``<work_dir>/log_<时间戳>.log``           loguru 文件日志。上游把
+  ``{"Dev": ..}`` / ``{"Test": ..}`` / ``Best_dev: .., Epoch : ..``
+  写进日志(训练流程)或 ``Dev WER: ..`` / ``Test WER: ..``(test 阶段)。
 - ``<work_dir>_best_model.pt``              最佳模型;注意 work_dir 同时被当作
   文件名前缀(见 ExperimentManager.run_train),所以轨迹记录形如
   ``<work_dir>dev_19.20_epoch5_model.pt``
 
-因此 work_dir 既可能是目录(结果/日志),也可能是文件前缀(checkpoint),
-这里两种都查,调用方不需要记住这个区别。
+如果目录里恰好有 ``experiment_result*.json`` / ``sample_statistics*.json``
+(本仓库旧分支或用户自己的脚本写的),也会一并读出来 —— 属于额外福利,上游本身
+不会生成。
+
+因此 work_dir 既可能是目录(日志),也可能是文件前缀(checkpoint),这里两种都查。
 """
 
 import glob
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,17 +31,32 @@ _RESULT_GLOBS = ("experiment_result*.json", "sample_statistics*.json")
 _CHECKPOINT_GLOBS = ("*_model.pt",)
 _MAX_WALK_DEPTH = 3
 
+# 上游日志里的 WER 行(loguru 会把 dict 原样 repr 出来)
+_WER_LINE_PATTERNS = (
+    ("dev", re.compile(r"[\"']Dev[\"']\s*:\s*([0-9]+(?:\.[0-9]+)?)")),
+    ("test", re.compile(r"[\"']Test[\"']\s*:\s*([0-9]+(?:\.[0-9]+)?)")),
+    ("dev", re.compile(r"Dev WER:\s*([0-9]+(?:\.[0-9]+)?)")),
+    ("test", re.compile(r"Test WER:\s*([0-9]+(?:\.[0-9]+)?)")),
+)
+_BEST_LINE_PATTERN = re.compile(
+    r"Best_dev:\s*([0-9]+(?:\.[0-9]+)?),\s*Epoch\s*:\s*(\d+)")
+_EPOCH_LINE_PATTERN = re.compile(r"Epoch (\d+) costs")
+_HISTORY_LIMIT = 20
+
 
 def read_results(layout, work_dir):
-    """读取 work_dir 下的全部结果文件。
+    """读取 work_dir 下的结果。
+
+    上游没有结果 JSON,所以主要指标从 ``log_*.log`` 里解析;若目录里存在
+    ``experiment_result*.json`` / ``sample_statistics*.json`` 也会读出来。
 
     Args:
         layout: RepoLayout。
         work_dir: 配置里写的 work_dir(相对路径按 core/ 解析)。
 
     Returns:
-        dict: ``work_dir``、``exists``、``results``(文件名 -> 内容,解析失败
-        的文件单独给出 error)、``summary``(便于比较的关键指标)。
+        dict: ``work_dir``、``exists``、``results``(JSON 文件)、``summary``
+        (关键指标)、``source``(指标来源)、``log_file``。
     """
     directory = layout.resolve_work_dir(work_dir)
     payload = {
@@ -75,13 +94,80 @@ def read_results(layout, work_dir):
                               "num_skipped", "num_failed", "skip_rate", "status")
                 if field in content
             }
-    payload["summary"] = summary
-    if not payload["results"]:
+
+    log_file = _newest_log(directory)
+    if log_file is not None:
+        metrics = parse_log_metrics(log_file)
+        payload["log_file"] = str(log_file)
+        payload["summary"]["from_log"] = metrics
+        payload["source"] = "log+json" if summary else "log"
+    else:
+        payload["source"] = "json" if summary else None
+
+    payload["summary"].update(summary)
+    if not payload["results"] and log_file is None:
         payload["note"] = (
-            f"{directory} 下还没有结果文件;训练中途只有日志可以看,"
-            "评估完成后才会写出 experiment_result*.json"
+            f"{directory} 下既没有 log_*.log 也没有结果 JSON;"
+            "实验可能还没启动,或用 list_work_dirs 找找别的目录"
+        )
+    elif not payload["results"]:
+        payload["note"] = (
+            "上游 core 不落盘结果 JSON;上面的 from_log 是从日志文本解析出来的,"
+            "权威指标仍在日志里(tail_log 可看原文)"
         )
     return payload
+
+
+def _newest_log(directory):
+    """目录下最新的 log_*.log;没有则 None。"""
+    candidates = sorted(directory.glob("log_*.log"), key=lambda path: path.stat().st_mtime)
+    return candidates[-1] if candidates else None
+
+
+def parse_log_metrics(path):
+    """从上游日志里解析 WER 与 epoch(纯文本,失败就返回 None 字段)。
+
+    解析的是上游 ``LogManager.info`` 实际写出的那几行:
+    ``{"Dev": 19.9}`` / ``{"Test": 20.1}`` / ``Best_dev: 19.90, Epoch : 3`` /
+    ``Dev WER: 19.90`` / ``Test WER: 20.10`` / ``Epoch 3 costs ...``。
+    """
+    metrics = {
+        "dev_wer": None,
+        "test_wer": None,
+        "best_dev_wer": None,
+        "best_epoch": None,
+        "last_epoch": None,
+        "history": [],
+        "lines_scanned": 0,
+    }
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return metrics
+
+    for line in text.splitlines():
+        metrics["lines_scanned"] += 1
+        best = _BEST_LINE_PATTERN.search(line)
+        if best:
+            metrics["best_dev_wer"] = float(best.group(1))
+            metrics["best_epoch"] = int(best.group(2))
+            continue
+        epoch = _EPOCH_LINE_PATTERN.search(line)
+        if epoch:
+            metrics["last_epoch"] = int(epoch.group(1))
+            continue
+        for split, pattern in _WER_LINE_PATTERNS:
+            found = pattern.search(line)
+            if found:
+                value = float(found.group(1))
+                metrics["{}_wer".format(split)] = value
+                metrics["history"].append({"split": split, "wer": value})
+                break
+
+    if len(metrics["history"]) > _HISTORY_LIMIT:
+        metrics["history"] = metrics["history"][-_HISTORY_LIMIT:]
+    return metrics
+
 
 
 def list_artifacts(layout, work_dir):

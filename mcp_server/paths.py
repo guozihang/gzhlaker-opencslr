@@ -15,26 +15,28 @@ ENV_RUNS_DIR = "OPENCSLR_MCP_RUNS_DIR"
 # 覆盖执行 core/main.py 用的解释器(默认本进程的解释器)
 ENV_PYTHON = "OPENCSLR_PYTHON"
 
-# 仓库根目录标志文件:三个配置入口之一
-_ROOT_MARKER = ("core", "configs", "exp.yaml")
+# 仓库根目录标志:core/main.py 存在(core/configs/ 另行检查)
+_ROOT_MARKER = ("core", "main.py")
 
 
 class RepoLayout:
     """仓库布局与关键入口路径。
 
-    所有实验命令都以 core/ 为工作目录执行(与 script/run.sh 一致),因此
-    配置里写的相对 work_dir(如 ``./work_dir/vac_smkd/``)都相对 core/ 解析。
+    这是**上游 immc-lab/OpenCSLR 原样的布局**:一个实验 = ``core/configs/`` 下
+    一个扁平 YAML(如 ``vac.yaml``),没有 exp.yaml/network.yaml 这种分节配置。
+
+    所有实验命令都以 core/ 为工作目录执行 —— 上游
+    ``ArgumentManager.map()`` 会去读 ``./configs/<dataset>.yaml``(相对进程 cwd),
+    所以这个 cwd 是硬要求,不是习惯。
     """
 
     def __init__(self, root):
         self.root = Path(root).expanduser().resolve()
         self.core_dir = self.root / "core"
         self.configs_dir = self.core_dir / "configs"
-        self.exp_config = self.configs_dir / "exp.yaml"
-        self.network_config = self.configs_dir / "network.yaml"
-        self.dataset_config = self.configs_dir / "dataset.yaml"
         self.main_entry = self.core_dir / "main.py"
-        self.preprocess_entry = self.core_dir / "preprocess" / "dataset_preprocess.py"
+        self.preprocess_dir = self.core_dir / "preprocess"
+        self.preprocess_entry = self.preprocess_dir / "dataset_preprocess.py"
 
     @classmethod
     def discover(cls, root=None):
@@ -42,14 +44,14 @@ class RepoLayout:
         return cls(root if root is not None else find_repo_root())
 
     def missing_entries(self):
-        """返回缺失的关键文件列表(启动自检用)。"""
+        """返回缺失的关键文件/目录列表(启动自检用)。"""
         entries = {
-            "exp_config": self.exp_config,
-            "network_config": self.network_config,
-            "dataset_config": self.dataset_config,
             "main_entry": self.main_entry,
         }
-        return [f"{name} ({path})" for name, path in entries.items() if not path.is_file()]
+        missing = [f"{name} ({path})" for name, path in entries.items() if not path.is_file()]
+        if not self.configs_dir.is_dir():
+            missing.append(f"configs_dir ({self.configs_dir})")
+        return missing
 
     def require_entries(self):
         """关键文件缺失时抛 FileNotFoundError。"""
@@ -92,7 +94,7 @@ class RepoLayout:
         return {
             "repo_root": str(self.root),
             "core_dir": str(self.core_dir),
-            "exp_config": str(self.exp_config),
+            "configs_dir": str(self.configs_dir),
             "runs_dir": str(self.runs_dir),
             "python": self.python,
         }
@@ -106,7 +108,7 @@ def sys_default_python():
 
 
 def find_repo_root(start=None):
-    """从 start 逐级向上查找包含 core/configs/exp.yaml 的目录。
+    """从 start 逐级向上查找包含 core/main.py 的目录。
 
     Args:
         start: 起始目录;为 None 时优先读 OPENCSLR_ROOT,否则用本文件所在目录。
@@ -120,7 +122,7 @@ def find_repo_root(start=None):
             root = Path(override).expanduser().resolve()
             if not (root / Path(*_ROOT_MARKER)).is_file():
                 raise FileNotFoundError(
-                    f"{ENV_ROOT}={override} 下找不到 core/configs/exp.yaml,"
+                    f"{ENV_ROOT}={override} 下找不到 core/main.py,"
                     "请检查环境变量是否指向 OpenCSLR 仓库根目录"
                 )
             return root
@@ -131,6 +133,6 @@ def find_repo_root(start=None):
         if (candidate / Path(*_ROOT_MARKER)).is_file():
             return candidate
     raise FileNotFoundError(
-        f"从 {current} 向上未找到 core/configs/exp.yaml;"
+        f"从 {current} 向上未找到 core/main.py;"
         f"可用环境变量 {ENV_ROOT} 指定 OpenCSLR 仓库根目录"
     )

@@ -1,599 +1,301 @@
-# OpenCSLR: A Unified Framework for Continuous Sign Language Recognition
+OpenCSLR: An Open-Source Toolbox for Continuous Sign Language Recognition
 
-[![Python](https://img.shields.io/badge/Python-3.7-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-1.8%2B-red)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-orange)](https://github.com/immc-lab/OpenCSLR/releases)
 
 ## Overview
 
-**OpenCSLR** is a unified, modular, and reproducible framework for continuous sign language recognition (CSLR) research. Unlike traditional toolboxes that simply aggregate models, OpenCSLR provides a **standardized experimental infrastructure** that enables:
-
-- **Fair component comparison**: Compare backbones, temporal modules, losses, and decoders under identical data conventions
-- **Efficiency-accuracy tradeoffs**: Systematic analysis of model parameters, GPU memory, training throughput, and inference speed
-- **Cross-dataset transfer**: Evaluate generalization with unified interfaces across Phoenix2014, Phoenix2014-T, and CSL-Daily
-- **Low-cost extensibility**: Add new models without modifying core training logic through a registry-based architecture
-
-This framework prioritizes **deterministic reproducibility** with fixed seeds and one shared set of conventions, making it ideal for controlled experiments and ablation studies.
+OpenCSLR (Open Continuous Sign Language Recognition) is a comprehensive, modular toolbox for continuous sign language recognition (CSLR) built on PyTorch. It provides a flexible and extensible architecture, making it suitable for both research and production use cases.
 
 ## Key Features
 
-### Unified Experimental Protocol
-- **Fixed seed reproducibility**: Deterministic training with unified random state across Python, NumPy, PyTorch, CUDA, and DataLoaders
-- **Standardized preprocessing**: Consistent video decoding, frame sampling, resize, crop, and normalization
-- **Unified evaluation**: Identical gloss vocabulary, decoder settings, and WER calculation across all models
-- **No protocol switch**: 统一性是默认且唯一的行为,配置里没有 `unified` / `official` 开关
+- **Modular Design**: Highly decoupled components with a manager-based architecture for easy extension and maintenance
+- **Multiple Model Architectures**: Support for SlowFast, TLP (Two-Stream Lightweight Pyramid), VAC (Visual Attention Consistency), CorrNet, and other advanced models
+- **Efficient Training**: Mixed precision training, memory-mapped data loading, and multi-GPU support
+- **Professional Evaluation**: Word Error Rate (WER) metrics, Beam Search decoding, and detailed result analysis
+- **Experiment Management**: Weights & Biases integration for experiment tracking and visualization
+- **Multiple Dataset Support**: Phoenix2014, Phoenix2014-T, CSL, CSL-Daily, and customizable dataset support
 
-### Modular Architecture
-- **Registry-based design**: Add models, backbones, temporal modules, losses, and decoders without modifying core code
-- **Container system**: Four-stage pipeline (spatial → temporal → loss → decoder) with standardized I/O contracts
-- **Configuration-driven**: All components selected via YAML configs, with key/type validation before training starts
+## Project Structure
 
-### Supported Models & Datasets
-- **Models**: SlowFast, TLP, VAC, CorrNet, SEN, and extensible to new architectures
-- **Datasets**: Phoenix2014, Phoenix2014-T, CSL-Daily with unified gloss vocabularies
-- **Multi-GPU training**: DataParallel support with efficient data loading
-
-### Efficient Training Pipeline
-- **Accelerated data loading**: Memory-mapped video, GPU augmentation, CUDA prefetching, and persistent workers
-- **Error resilience**: Continue training on data errors, log skipped/failed samples, and record per-run sample statistics
-- **Experiment tracking**: Weights & Biases integration, checkpoint management, and watchdog scripts
+```
+OpenCSLR/
+├── core/                 # Main source code
+│   ├── main.py           # Program entry point
+│   ├── manager/          # Manager components
+│   │   ├── argument_manager.py
+│   │   ├── config_manager.py
+│   │   ├── experiment_manager.py
+│   │   └── ...
+│   ├── models/           # Model architectures
+│   │   ├── build_function.py
+│   │   ├── modules/
+│   │   └── senmodules/
+│   │   └── ...
+│   ├── dataset/          # Dataset loaders
+│   ├── libs/             # External libraries and utilities
+│   ├── configs/          # Configuration files
+│   └── preprocess/       # Data preprocessing scripts
+└── docs/                 # Documentation
+```
 
 ## Installation
 
-### Quick Start (Recommended)
+### Prerequisites
+
+- Python 3.8+
+- PyTorch 1.8+
+- CUDA 10.2+ (for GPU acceleration)
+
+### Install Dependencies
 
 ```bash
 # Clone the repository
-git clone https://github.com/immc-lab/OpenCSLR.git
+git clone https://github.com/immc-lab/OpenSLR.git
 cd OpenCSLR
 
-# Create conda environment (includes all dependencies)
-conda env create -f environment.yml
-conda activate openslr
-
-# Verify installation
-python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
-```
-
-### Alternative: pip Installation
-
-```bash
-# Create virtual environment
-python3.7 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install PyTorch (adjust CUDA version as needed)
-pip install torch==1.8.0+cu102 torchvision==0.9.0+cu102 -f https://download.pytorch.org/whl/torch_stable.html
-
-# Install other dependencies
+# Install dependencies
 pip install -r requirements.txt
-```
-
-### System Requirements
-
-- **Python**: 3.7 (recommended for scipy compatibility)
-- **PyTorch**: ≥1.8.0
-- **CUDA**: ≥10.2 (for GPU training)
-- **GPU**: ≥8GB VRAM (training), ≥4GB (inference)
-- **RAM**: ≥16GB
-- **Disk**: ≥50GB for datasets
-
-安装后可在仓库根目录运行自检脚本,它会检查依赖、配置文件与核心模块导入:
-
-```bash
-bash scripts/verify_installation.sh
 ```
 
 ## Quick Start
 
 ### 1. Data Preparation
 
-Download and preprocess a dataset (Phoenix2014 example):
+OpenCSLR supports several public sign language datasets. For example, to use the Phoenix2014 dataset:
 
 ```bash
+# Download and preprocess the Phoenix2014 dataset
 cd core/preprocess
-python dataset_preprocess.py --dataset phoenix2014 \
-    --dataset-root /path/to/phoenix2014 \
-    --process-image
+python dataset_preprocess.py --dataset phoenix2014 --dataset-root /path/to/phoenix2014
 ```
 
-Supported datasets: `phoenix2014`, `phoenix2014t`, `csl-daily`
+### 2. Configure Training
 
-### 2. Training
+Create or modify a configuration file in `core/configs/`:
 
-Train a model:
+```yaml
+feeder: dataset.dataloader_video.VideoDataset
+phase: train
+dataset: phoenix2014
+num_epoch: 80
+work_dir: ./work_dir/baseline_experiment/
+batch_size: 8
+
+device: 0,1  # GPU devices
+eval_interval: 1
+save_interval: 5
+
+model: models.build_function.build_slowfast
+model_args:
+    num_classes: 1296
+    hidden_size: 1024
+    c2d_type: slowfast101
+    kernel_size: ['K5', "P2", 'K5', "P2"]
+
+optimizer_args:
+    optimizer: Adam
+    base_lr: 0.0001
+    step: [40, 60]
+    weight_decay: 0.0001
+```
+
+### 3. Start Training
 
 ```bash
 cd core
-python main.py \
-    --config configs/exp.yaml \
-    --exp baseline \
-    --work-dir ./work_dir/slowfast_phoenix14 \
-    --device 0,1
+python main.py --model models.build_function.build_vac --work-dir ./work_dir/OpenCSLR/vac/14/ --dataset phoenix2014 --config ./configs/vac.yaml
 ```
 
-Key arguments:
-- `--config`: Experiment configuration file (default `configs/exp.yaml`)
-- `--exp`: Experiment section name inside `--config` (`baseline` / `tlp` / `vac` / `corrnet`)
-- `--work-dir`: Output directory for checkpoints and logs
-- `--device`: GPU IDs (comma-separated for multi-GPU), or `none` for CPU
-- `--random-seed`: Random seed (default: 0, for reproducibility)
+## Model Architectures
+- **SlowFast**: Two-pathway network for video recognition with different temporal resolutions
+- **TLP (Two-Stream Lightweight Pyramid)**: Efficient architecture with spatial and temporal streams
+- **VAC (Visual Attention Consistency)**: Incorporates attention mechanisms for improved performance
+- **CorrNet**: Correlation-based network for sign language recognition
+- **Custom Models**: Easily extendable to add new model architectures
 
-`--config` 指向的实验节通过 `network: <name>` 引用 `configs/network.yaml` 中的网络配置；
-数据集路径与评测语料由 `--dataset` 在 `configs/dataset.yaml` 中选取。
+## Datasets
 
-### 3. Evaluation
+OpenCSLR supports several public sign language datasets:
 
-Evaluate a trained model on the test set:
+- **Phoenix2014**: Large-scale continuous sign language recognition dataset
+- **Phoenix2014-T**: German sign language dataset with temporal annotations
+- **CSL**: Chinese Sign Language dataset
+- **CSL-Daily**: Daily Chinese Sign Language dataset
+
+## Evaluation
+
+The framework provides comprehensive evaluation metrics:
 
 ```bash
-python main.py \
-    --config configs/exp.yaml \
-    --exp baseline \
-    --phase test \
-    --load-weights ./work_dir/slowfast_phoenix14_best_model.pt \
-    --device 0
+# Evaluate a trained model
+python main.py --model models.build_function.build_vac --dataset phoenix2014 --config ./configs/vac.yaml --phase test --load-checkpoints ./work_dir/OpenCSLR/vac/14/best_model.pt
 ```
 
-Results are written to `work_dir`:
-- `experiment_result.json`（test）/ `experiment_result_dev.json`（dev）— WER 与样本统计
-- `sample_statistics_{dev,test}.json` — 逐样本的成功 / 跳过 / 失败明细
 
-## Experimental Conventions
 
-为保证跨模型可比，所有主实验遵循同一套约定。这些约定由配置与代码保证，
-没有单独的 "protocol" 开关——统一性是默认且唯一的行为。
 
-- **Fixed global seed**: 由 `random_seed` 固定 Python / NumPy / PyTorch / CUDA 的随机状态
-- **Standardized preprocessing**: 各实验共用同一套视频解码、抽帧、resize/crop、归一化路径
-- **Unified vocabulary**: 每个数据集的 gloss→index 映射来自同一份 `gloss_dict.npy`
-- **Consistent decoding**: `decode_mode`（greedy / beam）在 `network.yaml` 的网络节中统一指定
-- **Identical WER calculation**: 所有实验走同一个 `EvaluationManager` 与 groundtruth STM
-
-复现论文原始设置时，在同一套约定下按需调整该实验节的 `feeder_args` /
-`model_args`，并在结果表中注明差异。
-
-### Important Notes
-
-1. **Single-seed policy**: 所有实验使用单个固定种子做确定性复现，结果**不用于**统计显著性检验或置信区间估计。
-
-2. **Sample validity tracking**: 每次评估记录总样本数、成功数、跳过数（数据缺失等）与失败数。跳过率超过 5% 的实验被标记为 `invalid`——否则 WER 会因为少算了一批难样本而虚高。
-
-3. **Result labeling**: 结果表中必须注明网络配置与解码设置，**不要**在同一张表里混用不同设置的结果。
-
-## Supported Models & Datasets
-
-### Models
-
-All models implemented with unified four-container architecture:
-
-| Model | Description | Config |
-|-------|-------------|--------|
-| **SlowFast** | Two-pathway network with fast/slow temporal streams | `build_slowfast` |
-| **TLP** | Two-Stream Lightweight Pyramid | `build_tlp` |
-| **VAC** | Visual Attention Consistency with knowledge distillation | `build_vac` |
-| **CorrNet** | Correlation-based spatiotemporal network | `build_corrnet` |
-| **SEN** | Signed Exact Network | `build_sen` |
-
-### Datasets
-
-| Dataset | Language | Vocab Size | Train/Dev/Test |
-|---------|----------|------------|----------------|
-| **Phoenix2014** | German (DGS) | 1,296 | 5,672 / 540 / 629 |
-| **Phoenix2014-T** | German (DGS) | 1,066 | 7,096 / 519 / 642 |
-| **CSL-Daily** | Chinese (CSL) | 2,000 | 18,401 / 1,077 / 1,176 |
-
-### 与上游 [immc-lab/OpenCSLR](https://github.com/immc-lab/OpenCSLR) 的结构一致性
-
-五个模型的**架构语义**已逐个核对并与上游对齐(逐层参数、模块顺序、forward 数据流、
-损失组成与权重、解码器行为)。核对方式:逐文件通读 + 去 docstring/别名的规范化 AST
-比对;结论由 `core/tests/test_upstream_structure_alignment.py` 与
-`core/tests/test_checkpoint_compat.py` 守住(不需要 torch 即可运行)。
-
-TLP / VAC / CorrNet 与上游**逐层等价**;两处曾经偏离、现已按上游对齐:
-
-| 位置 | 上游结构 | 本仓库历史 | 现状 |
-|---|---|---|---|
-| SEN 时序卷积 | `SENTemporalConv`:`P` → `MaxPool1d(ceil_mode=False)`,kernel 由 `conv_type` 推 | 曾复用 TLP 的 LiftPool 版 `TemporalConv` | 默认上游结构;`model_args.temporal_conv: liftpool` 可选回历史结构 |
-| SlowFast 融合 | `FUSE: FuseFastToSlow` | `04ede88..9bd3e00` 期间默认 `FuseBiAdd` | 默认上游结构;`slowfast_config` 指向 `SLOWFAST_64x2_R101_50_50_FuseBiAdd.yaml` 可加载历史权重 |
-
-**加载权重。** `--load-weights` / `--load-checkpoints` 不再「全有或全无」:先用
-`strict=False` 取回差异,只有**可证明不影响前向**的键才放行(SlowFast 的
-`temporal_model.conv1d` 别名键、`TemporalSlowFastConv1D` 外层从不使用的 `fc`、
-BatchNorm 的 `num_batches_tracked`),其余任何缺失/多余都会带着键名报错,并提示是
-FUSE 还是 SEN 的结构选错了。这样上游发布的预训练权重与本仓库重构前的权重都能直接
-加载,同时不会把真正的结构不匹配悄悄咽下去。
-
-有意保留的差异(都**不影响权重加载,也不影响计算结果**):
-
-- 上游写进 data dict 的三个死键 `visual_features` / `output_first` / `conv_sents`
-  本仓库不再产出(上游也只写不读;`output_first` 的消费方改读 `sequence_logits[0]`,
-  是同一张量)。
-- 束搜索后端用仓库内置的纯 Python 移植(`core/libs/ctcdecode`)替代编译版
-  `ctcdecode`:算法与超参一致,移植版自述中间概率为 float64(约 1e-6 量级差异)、
-  输出 padding 填 0、`num_processes` 退化为串行。
-- `decode_mode` 在本仓库真正生效(上游通用解码器写死 `beam`);仓库自带配置都是
-  `beam`,因此默认行为一致。
-- 上游 `ModuleManager` 的 SGD 分支把整个 module 传给 `optim.SGD`(会直接
-  `TypeError`)本仓库修成 `.parameters()`;`Container` 对非 dict 输出抛错而不是静默跳过。
-
-
-
-
-## Performance Baselines
-
-Single-seed results with fixed seed for reproducibility:
-
-### Phoenix2014
-
-| Model | Dev WER (%) | Test WER (%) | Params (M) |
-|-------|-------------|--------------|------------|
-| VAC + SMKD | 19.9 | 21.3 | - |
-| SEN | 19.9 | 19.8 | - |
-| CorrNet | 20.2 | 20.6 | - |
-| TLP | 20.2 | 20.8 | - |
-| SlowFast | 21.8 | 21.5 | - |
-
-**Note**: These are single-seed results intended for deterministic reproduction and system comparison, not for estimating run variance or statistical significance.
-
-
-## Configuration System
-
-OpenCSLR uses a three-tier YAML configuration system:
-
-### Example: Training SlowFast on Phoenix2014
-
-配置分三层:exp 配置按**实验名**分节,每个实验用 `network:` 引用 network 配置
-中按**网络名**分节的网络定义;数据集则由 `--dataset` 在 `dataset.yaml` 中选取。
-
-```yaml
-# core/configs/exp.yaml —— 实验节,按实验名组织
-_common_experiment: &common_experiment   # YAML 锚点,复用公共字段
-    feeder: dataset.dataloader_video.VideoDataset
-    phase: train
-    num_epoch: 80
-    batch_size: 2
-    random_seed: 0
-    num_worker: 8
-    persistent_workers: true
-
-baseline:
-    <<: *common_experiment
-    network: slowfast          # 引用 network.yaml 中的网络节
-    dataset: phoenix2014       # 选择 dataset.yaml 中的数据集节
-    device: 0,1
-    work_dir: /path/to/work_dir
-```
-
-```yaml
-# core/configs/network.yaml —— 网络节,按网络名组织
-slowfast:
-    model: slowfast            # models/slowfast.py 中 @register_model("slowfast") 的注册名
-    decode_mode: beam          # greedy 或 beam
-    model_args:
-        num_classes: 1296      # 须等于该数据集 gloss_dict 词表大小 + 1(CTC blank)
-        hidden_size: 1024
-        c2d_type: slowfast101
-    loss_weights:
-        SeqCTC: 1.0
-        Cu: 0.001
-        Cp: 0.001
-        Slow: 1.0
-        Fast: 1.0
-```
-
-实验节的同名键会覆盖网络节的值,因此数据集相关的开关(如 `feeder_args`)写在实验节里。
-
-### Configuration Validation
-
-`ConfigManager` 在合并 exp 与 network 配置后立即校验,启动前就失败,不浪费 GPU 时间:
-
-- 嵌套节的未知键(疑似拼写错误)与值类型
-- `random_seed` 为非负整数、`optimizer_args.base_lr` 为正数
-- `optimizer_args.optimizer` 在受支持列表内
-- `persistent_workers` 需要 `num_worker > 0`
-
-需要运行时信息才能判定的检查不在这里。例如 `model_args.num_classes` 与实际
-`gloss_dict` 词表大小是否一致,由 `DatasetManager` 读表后自行校验。
-
-## Extending OpenCSLR
-
-### Adding a New Model
-
-一个模型就是一个文件。框架（`Keys`、`Container`、`SignLanguageModel`、注册表）都在
-`core/models/__init__.py` 里，通用积木在 `core/modules/`，你只需要新写一个文件。
-
-分工原则：`core/modules/` 只放**可复用的东西**，按用途分四类，**每类目录里只放
-该类相关的**——`spatio/` 放空间网络、`temporal/` 放时序网络、
-`losses/` 放**最小单元损失**（`CTCLoss`、`SeqKD`）、`decoders/` 放通用 `Decoder`；
-不属于任何一类的辅助积木（`Identity`、`Classifier`、`NormLinear`、`TemporalLiftPooling`）
-一律进 `others/`。
-**模型专有的组装**（本模型怎么组合这些单元、怎么取哪个 key）写在该模型自己的文件里，
-别的模型不跟着变。
-
-**Step 1**: 新建 `core/models/my_model.py`，定义本模型的损失，组装四个容器并注册
-
-```python
-# core/models/my_model.py
-import torch.nn as nn
-
-from models import Container, Keys, SignLanguageModel, register_model, require
-from modules import BiLSTM, CTCLoss, Classifier, Decoder, ResNet, SeqKD, TemporalConv1D
-
-
-class MyModelLoss(nn.Module):
-    """本模型的损失:把最小单元按 loss_weights 加权组合起来。"""
-
-    def __init__(self, loss_weights):
-        super().__init__()
-        self.loss_weights = loss_weights
-        self.ctc = CTCLoss()          # 最小单元,来自 modules/losses
-        self.kd = SeqKD(T=8)
-
-    def forward(self, data):
-        require(data, Keys.CONV_LOGITS, Keys.SEQUENCE_LOGITS, Keys.LABEL,
-                Keys.FEAT_LEN, Keys.LABEL_LGT, who="MyModelLoss")
-        loss, total_loss = 0, {}
-        for key, weight in self.loss_weights.items():
-            if key == "SeqCTC":
-                total_loss["SeqCTC"] = weight * self.ctc(data[Keys.SEQUENCE_LOGITS], data)
-                loss += total_loss["SeqCTC"]
-            # ...
-        return {Keys.LOSS: loss, Keys.TOTAL_LOSS: total_loss}
-
-
-@register_model("my_model")          # 注册名即 config 中 model: 的取值
-def build_my_model(args, gloss_dict, loss_weights):
-    return SignLanguageModel(
-        spatial_module_container=Container([ResNet(args)]),
-        temporal_module_container=Container([TemporalConv1D(args), BiLSTM(args), Classifier(args)]),
-        loss_module_container=Container([MyModelLoss(loss_weights)]),
-        decoder=Decoder(args, gloss_dict),
-    )
-```
-
-如果本模型的解码要取别的 key（像 SlowFast 那样），同样在这个文件里继承
-`Decoder` 覆盖 `__call__`——见 `core/models/slowfast.py` 的 `SlowFastDecoder`。
-
-**Step 2**: 在 `core/models/__init__.py` 末尾把它加进 import 列表
-
-```python
-from . import corrnet, my_model, sen, slowfast, tlp, vac
-```
-
-导入即触发 `@register_model`，注册表随之填充，不需要改任何工厂分支。
-四个容器的契约见 `core/models/__init__.py` 的 `SignLanguageModel`：每个子模块的
-`forward` 接收并返回同一个 data dict（原地更新），按"空间→时序→损失→解码"执行。
-
-**Step 3**: Reference the registered name from a network section
-
-```yaml
-# core/configs/network.yaml —— 新增一节,exp.yaml 里用 network: my_model 引用
-my_model:
-  model: my_model                   # 与 @register_model("my_model") 对应
-  decode_mode: beam
-  model_args:
-      num_classes: 1296
-      # your custom args
-```
-
-**That's it!** No changes to `main.py` or training logic needed.
-
-### Cost Tracking
-
-When adding a new model, record:
-- Files added/modified
-- Lines of code added
-- Config entries added
-- Time spent (excluding dataset download and training wait)
-- Whether core training code was modified (should be "No")
-
-This data helps quantify the framework's extensibility.
-
-## Research Questions Enabled
-
-This unified framework is designed to answer:
-
-1. **RQ1 - Component Impact**: How do different backbones, temporal modules, losses, and decoders affect CSLR performance under identical conditions?
-
-2. **RQ2 - Efficiency Tradeoffs**: What are the tradeoffs between WER, model parameters, GPU memory, training throughput, and inference speed?
-
-3. **RQ3 - Transfer Learning**: How do unified interfaces and component choices affect generalization across compatible datasets?
-
-See the paper for detailed experimental results addressing these questions.
-
-## Advanced Features
-
-### Error-Resilient Training
-
-OpenCSLR handles data errors gracefully:
-
-- **Missing files**: Logged and skipped
-- **Decode failures**: Recorded with error type and traceback
-- **Invalid predictions**: Logged and continued
-- **Config/environment errors**: Fail fast before training
-
-All experiments generate a **sample statistics report**:
-```json
-{
-  "total_samples": 629,
-  "successful": 598,
-  "skipped": 28,
-  "failed": 3,
-  "skip_rate": 0.044,
-  "status": "valid",
-  "failed_samples": ["video_001.mp4", "video_042.mp4", "video_133.mp4"],
-  "error_details": [...]
-}
-```
-
-Experiments with >5% skip rate are automatically marked `invalid`.
-
-### Accelerated Data Loading
-
-Optimizations for faster training:
-
-- **Memory-mapped video**: Pre-indexed frame access without repeated decoding
-- **GPU augmentation**: Batched crop/flip/resize/normalize on GPU (B,T,C,H,W)
-- **CUDA prefetching**: Asynchronous H2D transfer with CUDA streams
-- **Persistent workers**: DataLoader workers stay alive across epochs
-- **Length bucketing**: Group similar-length videos to reduce padding waste (optional)
-
-Configure in your YAML:
-```yaml
-num_worker: 4
-prefetch_factor: 2
-persistent_workers: true
-gpu_prefetch: true
-gpu_augment: true
-preopen_memmap: true
-length_bucket_size: 0  # Set to 4 or 8 to enable bucketing
-```
-
-### Experiment Tracking
-
-Built-in Weights & Biases integration:
-
-```bash
-python main.py --config configs/exp.yaml --exp baseline --wandb
-```
-
-Tracks: loss curves, WER per epoch, GPU memory, learning rate, sample statistics, and checkpoints.
-
-## MCP Service: Experiment Management for Agents
-
-仓库自带一个 [MCP](https://modelcontextprotocol.io) 服务,把实验管理能力暴露成标准工具,
-让**已有的智能体**(Claude Code、IDE 助手等)直接调用工具来管理本仓库的实验:
-查看实验清单、预览实际生效的配置、**改任意超参数、起训练、训练中途热改超参数**、
-追踪进度、读取 WER 与 checkpoint。
-
-仓库本身不内置智能体、不调用任何大模型 API——决策在客户端那侧做,服务只负责把仓库能力
-可靠地暴露出去。
-
-```bash
-pip install -r mcp_server/requirements.txt          # 只多一个 mcp 包
-claude mcp add opencslr -- python3 -m mcp_server --root "$PWD"
-```
-
-仓库根目录的 `.mcp.json` 已配好项目级服务,在仓库里打开 Claude Code 会自动发现。
-完整的工具清单、环境变量与设计说明见 [mcp_server/README.md](mcp_server/README.md)。
-
-**配置只有一个真相来源。** 工具里的配置校验不是另写一份规则,而是在子进程里跑真实的
-`ArgumentManager` + `ConfigManager`,因此 `resolve_experiment` 的结论与真正启动时一致——
-配置错误在占上 GPU 之前就会报出来。
-
-**超参数处处可改。** `get_hyperparameters` 列出全部超参数、当前值与取值域;
-启动前用 `launch_experiment(overrides=...)` 覆盖(按 YAML 语义深合并,落在
-`core/configs/` 下的临时配置里,不动 `exp.yaml`,跑完自动清理、快照留档);
-训练进行中用 `set_hyperparameters(run_id, ...)` 热改学习率、损失权重、`num_epoch`
-等,再用 `get_control_state` 回读训练进程的 ack。改不了的键(网络结构、batch_size
-这类绑死启动阶段的)不会被静默忽略,而是连同理由回到调用方。
-
-## Documentation
-
-- **实验约定**: [docs/PROTOCOLS.md](docs/PROTOCOLS.md)
-- **API Reference**: `docs/source/api/`,由源码注释自动生成
-- **安装自检**: `bash scripts/verify_installation.sh`
-
-Build docs locally:
-```bash
-cd docs
-make gen-api  # 从 core/ 源码注释生成 API 页
-make html     # 构建 HTML 文档
-```
-
-## Project Structure
-
-```
-OpenCSLR/
-├── core/                      # Main source code
-│   ├── main.py                # Entry point
-│   ├── manager/               # Manager components
-│   │   ├── argument_manager.py
-│   │   ├── config_manager.py  # 配置加载 + 校验
-│   │   ├── experiment_manager.py
-│   │   ├── evaluation_manager.py
-│   │   ├── dataloader_manager.py
-│   │   ├── cuda_prefetcher.py
-│   │   └── device_manager.py
-│   ├── models/                # 模型层：一个模型一个文件
-│   │   ├── __init__.py        # Keys + Container/SignLanguageModel + 注册表
-│   │   ├── tlp.py             # 各模型的 build_* 构建函数
-│   │   ├── sen.py
-│   │   ├── vac.py
-│   │   ├── corrnet.py
-│   │   └── slowfast.py
-│   ├── modules/               # 共用积木：四类目录各放各的，辅助的统一进 others/
-│   │   ├── spatio/            #   空间网络（ResNet/SENresnet/corrnet_resnet/SlowFast）
-│   │   │                      #   + slowfast_modules/（vendored，整块不可拆）
-│   │   ├── temporal/          #   时序网络（BiLSTM/tconv/CorrNet_TemporalConv1D 等）
-│   │   ├── losses/            #   最小单元损失（CTCLoss/SeqKD）
-│   │   ├── decoders/          #   解码（Decoder）
-│   │   └── others/            #   辅助积木（Identity/Classifier/NormLinear）
-│   │                          #   + liftpool.py（TemporalLiftPooling/Local_Weighting）
-│   ├── dataset/               # Dataset loaders
-│   │   └── dataloader_video.py
-│   ├── libs/                  # Vendored libraries
-│   │   ├── pysclite/          # Pure Python WER calculator
-│   │   └── gpu_video_augmentation.py
-│   ├── configs/               # Configuration files
-│   │   ├── exp.yaml           # 实验配置(按实验名分节)
-│   │   ├── network.yaml       # 网络配置(按网络名分节)
-│   │   └── dataset.yaml       # 数据集配置
-│   ├── pipeline/              # Training/evaluation loops
-│   │   └── single.py
-│   └── preprocess/            # Data preprocessing
-│       └── dataset_preprocess.py
-├── mcp_server/                # MCP 服务:把实验管理暴露成工具给已有智能体
-│   ├── server.py              #   工具定义(唯一依赖 mcp 包的模块)
-│   ├── config.py              #   三个配置入口的读取与写入
-│   ├── core_probe.py          #   子进程里跑真实配置管理器,保证结论一致
-│   ├── runs.py                #   启停与运行记录
-│   ├── results.py             #   结果/日志/checkpoint 读取
-│   └── tests/                 #   不需要 torch/GPU 的测试
-├── script/                    # Helper scripts
-│   ├── run.sh                 # Training wrapper
-│   └── train_watchdog.sh      # Auto-restart on crash
-├── scripts/                   # Verification scripts
-│   ├── verify_installation.sh
-│   └── dump_model_structures.py  # 重构验收：对比 state_dict 的名称/形状/共享关系
-├── docs/                      # Documentation
-├── requirements.txt           # Pip dependencies
-├── environment.yml            # Conda environment
-└── README.md                  # This file
-```
+## Performance Comparison
+
+<table>
+  <caption><strong>Table 1:</strong> Performance comparison against originally reported results. Arrows indicate deviation from the original (&uarr; better, &darr; worse, = equal, - no official result).</caption>
+  <thead>
+    <tr>
+      <th rowspan="3">Method</th>
+      <th rowspan="3">Reference</th>
+      <th colspan="4">Phoenix14</th>
+      <th colspan="4">Phoenix14T</th>
+      <th colspan="4">CSL-Daily</th>
+    </tr>
+    <tr>
+      <th colspan="2">Ours</th>
+      <th colspan="2">Original</th>
+      <th colspan="2">Ours</th>
+      <th colspan="2">Original</th>
+      <th colspan="2">Ours</th>
+      <th colspan="2">Original</th>
+    </tr>
+    <tr>
+      <th>dev</th>
+      <th>test</th>
+      <th>dev</th>
+      <th>test</th>
+      <th>dev</th>
+      <th>test</th>
+      <th>dev</th>
+      <th>test</th>
+      <th>dev</th>
+      <th>test</th>
+      <th>dev</th>
+      <th>test</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>VAC+SMKD</td>
+      <td>ICCV'21</td>
+      <td>19.2 &uarr;</td>
+      <td>20.3 &uarr;</td>
+      <td>19.8</td>
+      <td>20.5</td>
+      <td>19.9</td>
+      <td>20.7</td>
+      <td>-</td>
+      <td>-</td>
+      <td>27.6</td>
+      <td>27.6</td>
+      <td>-</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>TLP</td>
+      <td>ECCV'22</td>
+      <td>20.4 &darr;</td>
+      <td>20.8 =</td>
+      <td>19.7</td>
+      <td>20.8</td>
+      <td>19.5 &darr;</td>
+      <td>21.4 &darr;</td>
+      <td>19.4</td>
+      <td>21.2</td>
+      <td>33.0</td>
+      <td>31.9</td>
+      <td>-</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>SEN</td>
+      <td>AAAI'23</td>
+      <td>20.6 &darr;</td>
+      <td>20.6 &uarr;</td>
+      <td>19.5</td>
+      <td>21.0</td>
+      <td>19.9 &darr;</td>
+      <td>20.6 &uarr;</td>
+      <td>19.3</td>
+      <td>20.7</td>
+      <td>32.2 &darr;</td>
+      <td>30.9 &darr;</td>
+      <td>31.1</td>
+      <td>30.7</td>
+    </tr>
+    <tr>
+      <td>CorrNet</td>
+      <td>CVPR'23</td>
+      <td>19.5 &darr;</td>
+      <td>19.4 =</td>
+      <td>18.8</td>
+      <td>19.4</td>
+      <td>18.9 =</td>
+      <td>19.9 &uarr;</td>
+      <td>18.9</td>
+      <td>20.5</td>
+      <td>27.6 &uarr;</td>
+      <td>26.4 &uarr;</td>
+      <td>30.6</td>
+      <td>30.1</td>
+    </tr>
+    <tr>
+      <td>SlowFast</td>
+      <td>ICASSP'24</td>
+      <td>18.5 &darr;</td>
+      <td>18.7 &darr;</td>
+      <td>18.0</td>
+      <td>18.3</td>
+      <td>18.7 &darr;</td>
+      <td>19.7 &darr;</td>
+      <td>17.7</td>
+      <td>18.7</td>
+      <td>25.7 &darr;</td>
+      <td>25.1 &darr;</td>
+      <td>25.5</td>
+      <td>24.9</td>
+    </tr>
+  </tbody>
+</table>
+
+## Pretrained Model Weights
+Below are download links for the best model weights of 5 state-of-the-art continuous sign language recognition (CSLR) models trained on three benchmark datasets: CSL-Daily, Phoenix14 and Phoenix14-T.
+
+### VAC + SMKD (ICCV 2021) ：
+- Phoenix14:  [download from Baidu Drive](https://pan.baidu.com/s/1XVDlqIVebkLniN6ZvF3xsw?pwd=ytip)
+- Phoenix14-T:  [download from Baidu Drive](https://pan.baidu.com/s/1A0N8sNUyPeZNqQ2S93jqlQ?pwd=1ryb)
+- CSL-Daily: [download from Baidu Drive](https://pan.baidu.com/s/1hR_JzI7F_7zxtVFR6j-Aag?pwd=e1t6)
+
+### TLP (ECCV 2022)：
+- Phoenix14: [download from Baidu Drive](https://pan.baidu.com/s/1rxW0Bfp3q_o3ypxZMaVqSA?pwd=53gc)
+- Phoenix14-T: [download from Baidu Drive](https://pan.baidu.com/s/1xbgIbLTMNqWrLyhvUaJi_Q?pwd=jdhu)
+- CSL-Daily: [download from Baidu Drive](https://pan.baidu.com/s/1T0ugjdP3AKMEHQkFp__GmQ?pwd=5z53)
+
+### SEN (AAAI 2023)
+- Phoenix14: [download from Baidu Drive](https://pan.baidu.com/s/1tFelts-E7XEuibjJMz88Uw?pwd=gt98)
+- Phoenix14-T: [download from Baidu Drive](https://pan.baidu.com/s/1KtK5EhUmlRkL8WEKjjMOBg?pwd=qehs)
+- CSL-Daily: [download from Baidu Drive](https://pan.baidu.com/s/1zmQMFCes_Hh0sTEjc6ITKA?pwd=53tu)
+
+### CorrNet (CVPR 2023)
+- Phoenix14: [download from Baidu Drive](https://pan.baidu.com/s/1bu0hJaMfDBoCShB5USuKfw?pwd=diwp)
+- Phoenix14-T: [download from Baidu Drive](https://pan.baidu.com/s/1wMtZV6XQCDrqNKtF6A1Qpg?pwd=v4si)
+- CSL-Daily: [download from Baidu Drive](https://pan.baidu.com/s/16tD4ZOZ1KTgUBPJGwrYKHA?pwd=cue3)
+
+### SlowFast (ICASSP 2024)
+- Phoenix14: [download from Baidu Drive](https://pan.baidu.com/s/1c0h4dU30NZd4XytUDrGaBw?pwd=j7er)
+- Phoenix14-T: [download from Baidu Drive](https://pan.baidu.com/s/1tRxC06MdtOPer0YQBy6IdA?pwd=meqd)
+- CSL-Daily: [download from Baidu Drive](https://pan.baidu.com/s/1DTdIQY8zTitAoBG5KpwJ9w?pwd=ke7j)
 
 ## Contributing
 
-Contributions are welcome! Please:
+Contributions are welcome! Please follow these steps:
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/YourFeature`)
-3. Follow the existing code style and add tests if applicable
-4. Ensure all models still train and evaluate under the shared conventions
-5. Update documentation for user-facing changes
-6. Submit a pull request with a clear description
+2. Create a new branch for your feature (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-For bug reports or feature requests, open an issue with:
-- Your environment (OS, Python version, PyTorch version, CUDA version)
-- Steps to reproduce (for bugs)
-- Expected vs. actual behavior
+## Resources
 
-## Citation
-
-If you use OpenCSLR in your research, please cite:
-
-```bibtex
-@software{openslr2024,
-  title={OpenCSLR: A Unified Framework for Continuous Sign Language Recognition},
-  author={Guo, Zihang and Contributors},
-  year={2024},
-  version={1.0.0},
-  publisher={GitHub},
-  url={https://github.com/immc-lab/OpenCSLR}
-}
-```
+- **[Awesome Continuous Sign Language Recognition](https://github.com/guozihang/awesome-continuous-sign-language-recognition)**: A comprehensive collection of papers, datasets, and resources for continuous sign language recognition research
 
 ## License
 
@@ -601,20 +303,24 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Research supported by [Your Institution/Funding]
-- Built on top of PyTorch and various open-source libraries
-- Inspired by state-of-the-art CSLR research
+- This project is inspired by various state-of-the-art sign language recognition research
+- We thank the contributors to the open-source libraries used in this project
 
-## Related Resources
+## Citation
 
-- **[Awesome Continuous Sign Language Recognition](https://github.com/guozihang/awesome-continuous-sign-language-recognition)**: Comprehensive collection of CSLR papers, datasets, and resources
+If you use this framework in your research, please cite:
 
-## Contact & Support
+```
+@misc{OpenCSLR2024,
+  title={OpenCSLR: An Open Continuous Sign Language Recognition Framework},
+  author={Zihang Guo, Jiawei Ren, Hongwei Zhang, Yiming Du, Huaiwen Zhang},
+  year={2024},
+  publisher={GitHub},
+  journal={GitHub repository},
+  howpublished={\url{https://github.com/immc-lab/OpenSLR}},
+}
+```
 
-- **Issues**: [GitHub Issues](https://github.com/immc-lab/OpenCSLR/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/immc-lab/OpenCSLR/discussions)
-- **Email**: [maintainer@example.com]
+## Contact
 
-## Changelog
-
-版本历史见 `git log`。
+For questions or support, please open an issue on GitHub or contact the project maintainers.

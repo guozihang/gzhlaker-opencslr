@@ -1,194 +1,30 @@
 # -*- encoding: utf-8 -*-
-"""OpenCSLR 配置管理器模块。
-
-负责加载实验配置:从 exp 配置文件中按实验名取节,再按该实验引用的
-网络名从 network.yaml 取网络配置,两者合并为全局配置数据,并在合并后
-校验配置本身(未知键、类型、非法取值)。
-
-需要运行时信息才能判定的检查不在这里,例如 ``model_args.num_classes``
-与实际 gloss_dict 词表大小的一致性由 DatasetManager 读表后自行校验。
-"""
-
-import os
+import json
 import yaml
+import toml
 from .argument_manager import ArgumentManager
 
 class ConfigManager:
-    """配置管理器。
-
-    使用类方法管理实验配置数据。配置文件拆分:
-      - exp 配置文件(默认 configs/exp.yaml):按实验名分节,包含实验设置,
-        各实验通过 ``network: <name>`` 引用网络配置;
-      - network.yaml:与 exp 配置文件同目录,按网络名分节,包含网络相关配置。
-    """
-
-    # 各嵌套配置节允许的键集合,用于在加载时发现拼写错误。
-    # 新增配置键时需同步更新对应集合。
-    KNOWN_NESTED_KEYS = {
-        "model_args": {
-            "num_classes", "hidden_size", "c2d_type", "conv_type",
-            "kernel_size", "use_bn", "share_classifier", "weight_norm",
-            "slowfast_config", "stride",
-            # SEN 的时序卷积结构选择(maxpool=上游结构 / liftpool=本地变体)与
-            # 输入尺寸覆盖,缺了会被当成拼写错误拒掉
-            "temporal_conv", "input_size",
-        },
-        "feeder_args": {
-            "mode", "datatype", "num_gloss", "drop_ratio", "frame_interval",
-            "image_scale", "skip_fileids", "skip_indices", "skip_info_path",
-            "allowable_vid_length", "limit_len", "cache_file_lists",
-            "cache_features", "precache_file_lists", "gpu_augment",
-            # 评估期行为开关,由 pipeline.single.seq_eval 读取
-            "max_eval_frames", "skip_failed_eval_batches",
-        },
-        "optimizer_args": {
-            "optimizer", "base_lr", "step", "learning_ratio", "weight_decay",
-            "start_epoch", "nesterov",
-        },
-        "loss_weights": {"SeqCTC", "ConvCTC", "Dist", "Cu", "Cp", "Slow", "Fast"},
-        "wandb": {"enable", "project", "entity"},
-    }
-
-    TYPE_RULES = {
-        "model_args": {
-            "num_classes": int, "hidden_size": int, "c2d_type": str,
-            "conv_type": int, "kernel_size": list, "use_bn": int,
-            "share_classifier": (bool, int), "weight_norm": bool,
-            "slowfast_config": str, "stride": list,
-        },
-        "feeder_args": {
-            "mode": str, "datatype": str, "num_gloss": int, "drop_ratio": (int, float),
-            "frame_interval": int, "image_scale": (int, float),
-            "allowable_vid_length": int, "limit_len": (int, type(None)),
-            "cache_file_lists": bool, "cache_features": bool,
-            "precache_file_lists": bool, "gpu_augment": bool,
-        },
-        "optimizer_args": {
-            "optimizer": str, "base_lr": (int, float), "step": list,
-            "learning_ratio": (int, float), "weight_decay": (int, float),
-            "start_epoch": int, "nesterov": bool,
-        },
-        "wandb": {"enable": bool, "project": str, "entity": str},
-    }
-
-    VALID_OPTIMIZERS = {"SGD", "Adam"}
 
     @classmethod
     def init(cls):
-        """初始化配置管理器,加载 exp 与 network 配置并合并。"""
         experiment_config_path = ArgumentManager.get( "config" )
-        cls.load_experiment(experiment_config_path)
+        cls.load(experiment_config_path)
 
     @classmethod
-    def _validate(cls, data):
-        """校验合并后的配置:嵌套节的键、类型,以及启动前就能判定的取值错误。
-
-        在训练开始前失败,避免带着拼写错误或非法取值浪费 GPU 时间。
-
-        Args:
-            data: 合并后的配置数据。
-
-        Raises:
-            ValueError: 出现未知键(疑似拼写错误)或非法取值时抛出。
-            TypeError: 配置值类型不符时抛出。
-        """
-        for section, known in cls.KNOWN_NESTED_KEYS.items():
-            value = data.get(section)
-            if not isinstance(value, dict):
-                continue
-            unknown = set(value) - known
-            if unknown:
-                raise ValueError(
-                    f"Unknown key(s) in '{section}': {sorted(unknown)}. "
-                    f"Allowed: {sorted(known)}."
-                )
-            rules = cls.TYPE_RULES.get(section, {})
-            for key, expected in rules.items():
-                if key in value and not isinstance(value[key], expected):
-                    raise TypeError(
-                        f"Invalid type for '{section}.{key}': expected {expected}, "
-                        f"got {type(value[key]).__name__}"
-                    )
-
-        seed = data.get("random_seed", 0)
-        if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
-            raise ValueError(f"random_seed must be a non-negative integer, got {seed!r}")
-
-        optimizer = data.get("optimizer_args", {}).get("optimizer")
-        if optimizer is not None and optimizer not in cls.VALID_OPTIMIZERS:
-            raise ValueError(
-                f"Unsupported optimizer {optimizer!r}. "
-                f"Expected one of {sorted(cls.VALID_OPTIMIZERS)}."
-            )
-
-        base_lr = data.get("optimizer_args", {}).get("base_lr")
-        if base_lr is not None and base_lr <= 0:
-            raise ValueError(f"optimizer_args.base_lr must be positive, got {base_lr}")
-
-        # persistent_workers 只在 num_worker > 0 时被 DataLoader 接受
-        if data.get("persistent_workers") and not data.get("num_worker"):
-            raise ValueError("persistent_workers requires num_worker > 0")
-
-    @classmethod
-    def load_experiment(cls, config_path):
-        """加载 exp 配置文件中的指定实验节,并合并其引用的网络配置。
-
-        Args:
-            config_path: exp 配置文件路径(按实验名分节的 YAML)。
-
-        Raises:
-            ValueError: 实验名或引用的网络名不存在时抛出。
-            TypeError: 配置节内容不是字典类型时抛出。
-        """
-        exp_name = ArgumentManager.get("exp")
-        with open(config_path, mode="r", encoding="utf-8") as f:
-            exp_all = yaml.load(f, Loader=yaml.FullLoader) or {}
-        if not isinstance(exp_all, dict):
+    def load(cls, config_path):
+        with open ( config_path , mode = "r" ) as f :
+            data = yaml.load ( f , Loader = yaml.FullLoader )
+        if not hasattr(cls, 'CONFIG_DATA'):
+            setattr(cls, 'CONFIG_DATA', {})
+        if isinstance(data, dict):
+            # 将读取到的 dict 每个 key 都融合到 CONFIG_DATA 中
+            getattr(cls, 'CONFIG_DATA').update(data)
+        else:
             raise TypeError("仅支持字典类型的配置数据，请检查配置文件内容。")
-        if exp_name not in exp_all:
-            raise ValueError(
-                f"Unknown experiment {exp_name!r}: not found in {config_path}. "
-                f"Available: {sorted(exp_all)}."
-            )
-        exp_data = exp_all[exp_name]
-        if not isinstance(exp_data, dict):
-            raise TypeError("仅支持字典类型的配置数据，请检查配置文件内容。")
-
-        network_name = exp_data.get("network")
-        if not network_name:
-            raise ValueError(f"Experiment {exp_name!r} must specify 'network' in {config_path}.")
-
-        config_dir = os.path.dirname(os.path.abspath(config_path))
-        network_path = os.path.join(config_dir, "network.yaml")
-        with open(network_path, mode="r", encoding="utf-8") as f:
-            network_all = yaml.load(f, Loader=yaml.FullLoader) or {}
-        if not isinstance(network_all, dict):
-            raise TypeError("仅支持字典类型的配置数据，请检查配置文件内容。")
-        if network_name not in network_all:
-            raise ValueError(
-                f"Unknown network {network_name!r}: not found in {network_path}. "
-                f"Available: {sorted(network_all)}."
-            )
-        network_data = network_all[network_name]
-        if not isinstance(network_data, dict):
-            raise TypeError("仅支持字典类型的配置数据，请检查配置文件内容。")
-
-        merged = dict(network_data)
-        merged.update(exp_data)  # 实验节可覆盖网络节的同名配置
-        merged.pop("network", None)  # network 仅为引用字段,不属于配置参数
-        cls._validate(merged)
-        setattr(cls, 'CONFIG_DATA', merged)
 
     @classmethod
     def get(cls, key=None):
-        """获取配置数据。
-
-        Args:
-            key: 配置键名。若为 None，则返回全部配置数据；否则返回指定键的值。
-
-        Returns:
-            全部配置数据字典或指定键的配置值
-        """
         if key is None:
             return getattr(cls, 'CONFIG_DATA')
         else:
@@ -196,9 +32,7 @@ class ConfigManager:
 
     @classmethod
     def __iter__(cls):
-        """迭代配置数据的键。
-
-        Returns:
-            iterator: 配置数据字典的键迭代器
-        """
         return iter(getattr(cls, 'CONFIG_DATA'))
+
+
+

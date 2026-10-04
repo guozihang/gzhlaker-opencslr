@@ -30,7 +30,7 @@ STATUS_STOPPED = "stopped"    # 被 stop_run 主动停止
 STATUS_UNKNOWN = "unknown"    # 进程已不在,但没有记录到退出码(服务重启过)
 
 # 由工具参数决定,不接受用 extra_args 重复指定
-RESERVED_FLAGS = ("--config", "--exp", "--work-dir", "--phase", "--device", "--control-file")
+RESERVED_FLAGS = ("--config", "--work-dir", "--phase", "--device")
 
 _STOP_GRACE_SECONDS = 15.0
 _KILL_GRACE_SECONDS = 5.0
@@ -109,25 +109,28 @@ class RunLauncher:
     # -------------------------------------------------------------- 命令构造
 
     def build_training_command(self, experiment, phase="train", work_dir=None,
-                               device=None, extra_args=None, config_path=None,
-                               control_file=None):
-        """拼出 ``python main.py --config <exp 配置> --exp <name> ...``。
+                               device=None, extra_args=None, config_path=None):
+        """拼出 ``python main.py --config <实验配置> --phase <phase> ...``。
 
-        config_path 用于「带超参数覆盖的临时配置」;control_file 一并传给
-        main.py,训练进程据此轮询中途热改。
+        上游没有 ``--exp``:实验就是 ``core/configs/<name>.yaml``,而
+        ``model:``(点号路径)由配置文件本身提供,所以命令行不必再传 ``--model``
+        —— 配置改了模型就跟着改,只有一份真相。
+
+        config_path 必须给:可能是实验自己的文件,也可能是带超参数覆盖的临时配置。
         """
+        if not config_path:
+            raise McpToolError(
+                "缺少实验配置文件路径;上游一个实验对应一个 configs/*.yaml,"
+                "没有可用的默认配置文件"
+            )
         command = [
             self.layout.python,
             "main.py",
             "--config",
-            str(config_path or self.layout.exp_config),
-            "--exp",
-            experiment,
+            str(config_path),
             "--phase",
             phase,
         ]
-        if control_file:
-            command += ["--control-file", str(control_file)]
         if work_dir:
             command += ["--work-dir", str(work_dir)]
         if device is not None:
@@ -136,9 +139,13 @@ class RunLauncher:
         return command
 
     def build_preprocess_command(self, dataset, dataset_root=None,
-                                 process_image=False, extra_args=None):
-        """拼出数据预处理命令(在 core/preprocess 下执行)。"""
-        command = [self.layout.python, "dataset_preprocess.py", "--dataset", dataset]
+                                 process_image=False, extra_args=None, script=None):
+        """拼出数据预处理命令(在 core/preprocess 下执行)。
+
+        上游按数据集分脚本(``dataset_preprocess.py`` / ``-T.py`` / ``-CSL-Daily.py``),
+        默认用通用那份,可用 ``script`` 显式指定变体。
+        """
+        command = [self.layout.python, script or "dataset_preprocess.py", "--dataset", dataset]
         if dataset_root:
             command += ["--dataset-root", str(dataset_root)]
         if process_image:
@@ -150,10 +157,10 @@ class RunLauncher:
     def _clean_extra_args(extra_args):
         """校验透传参数:必须是字符串列表,且不重复指定由工具参数决定的开关。
 
-        这里要挡住的不只是 ``--exp`` 这类原样写法:argparse 还接受
-        ``--exp=other`` 和 ``--ex other``(无歧义前缀缩写),两种都能绕过按
-        整串比对的检查、把工具已经校验过的取值改掉。所以按 ``=`` 前面的开关名
-        判断,并拒绝保留开关的任意前缀。
+        这里要挡住的不只是原样写法:argparse 还接受 ``--config=other`` 和
+        ``--conf other``(无歧义前缀缩写),两种都能绕过按整串比对的检查、把工具
+        已经校验过的取值改掉。所以按 ``=`` 前面的开关名判断,并拒绝保留开关的
+        任意前缀。
         """
         if not extra_args:
             return []
@@ -166,7 +173,7 @@ class RunLauncher:
             flag = item.split("=", 1)[0]
             if any(reserved.startswith(flag) for reserved in RESERVED_FLAGS):
                 raise McpToolError(
-                    f"{flag} 由工具参数决定(--exp/--phase/--work-dir/--device),"
+                    f"{flag} 由工具参数决定(--config/--phase/--work-dir/--device),"
                     "请不要放进 extra_args"
                 )
             cleaned.append(item)
@@ -176,16 +183,10 @@ class RunLauncher:
 
     def launch_training(self, experiment, phase="train", work_dir=None, device=None,
                         extra_args=None, log_path=None, config_path=None,
-                        control_file=None, run_id=None, ephemeral_config=None,
-                        config_snapshot=None):
+                        run_id=None, ephemeral_config=None, config_snapshot=None):
         run_id = run_id or self.store.new_id(experiment)
-        # 默认给每次运行都开一个控制文件:这样任何一次由 MCP 启动的训练都能
-        # 被中途热改,而不是「想起来要改的时候发现没通道」。
-        if control_file is None:
-            control_file = self.store.runs_dir / f"{run_id}.control.json"
         command = self.build_training_command(
-            experiment, phase, work_dir, device, extra_args,
-            config_path=config_path, control_file=control_file,
+            experiment, phase, work_dir, device, extra_args, config_path=config_path,
         )
         return self._launch(
             kind="train" if phase == "train" else "eval",
@@ -199,16 +200,16 @@ class RunLauncher:
             cwd=self.layout.core_dir,
             run_id=run_id,
             record_extra={
-                "config_path": str(config_path or self.layout.exp_config),
-                "control_file": str(control_file) if control_file else None,
+                "config_path": str(config_path) if config_path else None,
                 "ephemeral_config": str(ephemeral_config) if ephemeral_config else None,
                 "config_snapshot": str(config_snapshot) if config_snapshot else None,
             },
         )
 
     def launch_preprocess(self, dataset, dataset_root=None, process_image=False,
-                          extra_args=None, log_path=None):
-        command = self.build_preprocess_command(dataset, dataset_root, process_image, extra_args)
+                          extra_args=None, log_path=None, script=None):
+        command = self.build_preprocess_command(dataset, dataset_root, process_image,
+                                                extra_args, script=script)
         return self._launch(
             kind="preprocess",
             label=dataset,

@@ -32,7 +32,7 @@ def build_parser():
     parser.add_argument(
         "--root",
         default=None,
-        help="OpenCSLR 仓库根目录;默认从当前目录向上查找 core/configs/exp.yaml",
+        help="OpenCSLR 仓库根目录;默认从当前目录向上查找 core/main.py",
     )
     parser.add_argument(
         "--transport",
