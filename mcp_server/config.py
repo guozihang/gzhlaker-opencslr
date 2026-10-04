@@ -317,7 +317,8 @@ class ExperimentConfig:
             overwrite: 为 True 时覆盖同名文件。
         """
         path = self.config_path_for(name)
-        if path.exists() and not overwrite:
+        existed = path.exists()
+        if existed and not overwrite:
             raise McpToolError(f"实验 {name!r} 已存在({path});如需覆盖请传 overwrite=True")
         if not isinstance(model, str) or not model:
             raise McpToolError("model 必须是非空字符串(点号路径)")
@@ -356,7 +357,7 @@ class ExperimentConfig:
         return {
             "name": name,
             "config_path": str(path),
-            "replaced_existing": bool(overwrite and fields),
+            "replaced_existing": existed,
             "config": _load_yaml_text(text),
             "validation": {
                 "ok": verdict.get("ok"),
